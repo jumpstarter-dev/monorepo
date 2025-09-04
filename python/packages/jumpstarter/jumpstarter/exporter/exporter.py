@@ -8,6 +8,7 @@ import grpc
 from anyio import (
     AsyncContextManagerMixin,
     CancelScope,
+    Event,
     connect_unix,
     create_memory_object_stream,
     create_task_group,
@@ -25,6 +26,7 @@ from jumpstarter.common import Metadata
 from jumpstarter.common.streams import connect_router_stream
 from jumpstarter.config.tls import TLSConfigV1Alpha1
 from jumpstarter.driver import Driver
+from jumpstarter.exporter.hooks import HookContext, HookExecutor
 from jumpstarter.exporter.session import Session
 
 logger = logging.getLogger(__name__)
@@ -37,11 +39,14 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     lease_name: str = field(init=False, default="")
     tls: TLSConfigV1Alpha1 = field(default_factory=TLSConfigV1Alpha1)
     grpc_options: dict[str, str] = field(default_factory=dict)
+    hook_executor: HookExecutor | None = field(default=None)
     registered: bool = field(init=False, default=False)
     _unregister: bool = field(init=False, default=False)
     _stop_requested: bool = field(init=False, default=False)
     _started: bool = field(init=False, default=False)
     _tg: TaskGroup | None = field(init=False, default=None)
+    _current_client_name: str = field(init=False, default="")
+    _pre_lease_ready: Event | None = field(init=False, default=None)
 
     def stop(self, wait_for_lease_exit=False, should_unregister=False):
         """Signal the exporter to stop.
@@ -51,7 +56,6 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             should_unregister (bool): If True, unregister from controller. Otherwise rely on heartbeat.
         """
 
-        # Stop immediately if not started yet or if immediate stop is requested
         if (not self._started or not wait_for_lease_exit) and self._tg is not None:
             logger.info("Stopping exporter immediately, unregister from controller=%s", should_unregister)
             self._unregister = should_unregister
@@ -148,6 +152,12 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
         tg.start_soon(listen)
 
+        # Wait for pre-lease hook to complete before processing connections
+        if self._pre_lease_ready is not None:
+            logger.info("Waiting for pre-lease hook to complete before accepting connections")
+            await self._pre_lease_ready.wait()
+            logger.info("Pre-lease hook completed, now accepting connections")
+
         async with self.session() as path:
             async for request in listen_rx:
                 logger.info("Handling new connection request on lease %s", lease_name)
@@ -190,19 +200,83 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             tg.start_soon(status)
             async for status in status_rx:
                 if self.lease_name != "" and self.lease_name != status.lease_name:
+                    # Post-lease hook for the previous lease
+                    if self.hook_executor and self._current_client_name:
+                        hook_context = HookContext(
+                            lease_name=self.lease_name,
+                            client_name=self._current_client_name,
+                        )
+                        # Shield the post-lease hook from cancellation and await it
+                        with CancelScope(shield=True):
+                            await self.hook_executor.execute_post_lease_hook(hook_context)
+
                     self.lease_name = status.lease_name
                     logger.info("Lease status changed, killing existing connections")
+                    # Reset event for next lease
+                    self._pre_lease_ready = None
                     self.stop()
                     break
+
+                # Check for lease state transitions
+                previous_leased = hasattr(self, "_previous_leased") and self._previous_leased
+                current_leased = status.leased
+
                 self.lease_name = status.lease_name
                 if not self._started and self.lease_name != "":
                     self._started = True
+                    # Create event for pre-lease synchronization
+                    self._pre_lease_ready = Event()
                     tg.start_soon(self.handle, self.lease_name, tg)
-                if status.leased:
+
+                if current_leased:
                     logger.info("Currently leased by %s under %s", status.client_name, status.lease_name)
+                    self._current_client_name = status.client_name
+
+                    # Pre-lease hook when transitioning from unleased to leased
+                    if not previous_leased:
+                        if self.hook_executor:
+                            hook_context = HookContext(
+                                lease_name=status.lease_name,
+                                client_name=status.client_name,
+                            )
+
+                            # Start pre-lease hook asynchronously
+                            async def run_pre_lease_hook():
+                                try:
+                                    await self.hook_executor.execute_pre_lease_hook(hook_context)
+                                    logger.info("Pre-lease hook completed successfully")
+                                except Exception as e:
+                                    logger.error("Pre-lease hook failed: %s", e)
+                                finally:
+                                    # Always set the event to unblock connections
+                                    if self._pre_lease_ready:
+                                        self._pre_lease_ready.set()
+
+                            tg.start_soon(run_pre_lease_hook)
+                        else:
+                            # No hook configured, set event immediately
+                            if self._pre_lease_ready:
+                                self._pre_lease_ready.set()
                 else:
                     logger.info("Currently not leased")
+
+                    # Post-lease hook when transitioning from leased to unleased
+                    if previous_leased and self.hook_executor and self._current_client_name:
+                        hook_context = HookContext(
+                            lease_name=self.lease_name,
+                            client_name=self._current_client_name,
+                        )
+                        # Shield the post-lease hook from cancellation and await it
+                        with CancelScope(shield=True):
+                            await self.hook_executor.execute_post_lease_hook(hook_context)
+
+                    self._current_client_name = ""
+                    # Reset event for next lease
+                    self._pre_lease_ready = None
+
                     if self._stop_requested:
                         self.stop(should_unregister=True)
                         break
+
+                self._previous_leased = current_leased
         self._tg = None

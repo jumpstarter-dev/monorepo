@@ -101,3 +101,55 @@ export:
     ExporterConfigV1Alpha1.save(config)
 
     assert config == ExporterConfigV1Alpha1.load("test")
+
+
+def test_exporter_config_with_hooks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setattr(ExporterConfigV1Alpha1, "BASE_PATH", tmp_path)
+
+    path = tmp_path / "test-hooks.yaml"
+
+    text = """apiVersion: jumpstarter.dev/v1alpha1
+kind: ExporterConfig
+metadata:
+  namespace: default
+  name: test-hooks
+endpoint: "jumpstarter.my-lab.com:1443"
+token: "test-token"
+hooks:
+  preLease: |
+    echo "Pre-lease hook for $LEASE_NAME"
+    j power on
+  postLease: |
+    echo "Post-lease hook for $LEASE_NAME"
+    j power off
+  timeout: 600
+export:
+  power:
+    type: "jumpstarter_driver_power.driver.PduPower"
+"""
+    path.write_text(
+        text,
+        encoding="utf-8",
+    )
+
+    config = ExporterConfigV1Alpha1.load("test-hooks")
+
+    assert config.hooks.pre_lease == 'echo "Pre-lease hook for $LEASE_NAME"\nj power on\n'
+    assert config.hooks.post_lease == 'echo "Post-lease hook for $LEASE_NAME"\nj power off\n'
+    assert config.hooks.timeout == 600
+
+    # Test that it round-trips correctly
+    path.unlink()
+    ExporterConfigV1Alpha1.save(config)
+    reloaded_config = ExporterConfigV1Alpha1.load("test-hooks")
+
+    assert reloaded_config.hooks.pre_lease == config.hooks.pre_lease
+    assert reloaded_config.hooks.post_lease == config.hooks.post_lease
+    assert reloaded_config.hooks.timeout == config.hooks.timeout
+
+    # Test that the YAML uses camelCase
+    yaml_output = ExporterConfigV1Alpha1.dump_yaml(config)
+    assert "preLease:" in yaml_output
+    assert "postLease:" in yaml_output
+    assert "pre_lease:" not in yaml_output
+    assert "post_lease:" not in yaml_output
