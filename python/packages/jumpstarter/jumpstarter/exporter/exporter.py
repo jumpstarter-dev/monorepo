@@ -240,6 +240,8 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                         # Shield the post-lease hook from cancellation and await it
                         with CancelScope(shield=True):
                             await self._update_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
+                            # Pass the current session to hook executor for logging
+                            self.hook_executor.main_session = self._current_session
                             await self.hook_executor.execute_post_lease_hook(hook_context)
                             await self._update_status(ExporterStatus.AVAILABLE, "Available for new lease")
 
@@ -279,6 +281,8 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                                     await self._update_status(
                                         ExporterStatus.BEFORE_LEASE_HOOK, "Running beforeLease hooks"
                                     )
+                                    # Pass the current session to hook executor for logging
+                                    self.hook_executor.main_session = self._current_session
                                     await self.hook_executor.execute_pre_lease_hook(hook_ctx)
                                     await self._update_status(ExporterStatus.LEASE_READY, "Ready for commands")
                                     logger.info("beforeLease hook completed successfully")
@@ -311,6 +315,8 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                         # Shield the post-lease hook from cancellation and await it
                         with CancelScope(shield=True):
                             await self._update_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
+                            # Pass the current session to hook executor for logging
+                            self.hook_executor.main_session = self._current_session
                             await self.hook_executor.execute_post_lease_hook(hook_context)
                             await self._update_status(ExporterStatus.AVAILABLE, "Available for new lease")
 

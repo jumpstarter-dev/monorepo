@@ -7,9 +7,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Callable
 
+from jumpstarter.common import LogSource
 from jumpstarter.config.env import JMP_DRIVERS_ALLOW, JUMPSTARTER_HOST
 from jumpstarter.config.exporter import HookConfigV1Alpha1
 from jumpstarter.driver import Driver
+from jumpstarter.exporter.logging import get_logger
 from jumpstarter.exporter.session import Session
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ class HookExecutor:
 
     config: HookConfigV1Alpha1
     device_factory: Callable[[], Driver]
+    main_session: Session | None = field(default=None)
     timeout: int = field(init=False)
 
     def __post_init__(self):
@@ -63,9 +66,9 @@ class HookExecutor:
                     }
                 )
 
-                yield hook_env
+                yield session, hook_env
 
-    async def _execute_hook(self, command: str, context: HookContext) -> bool:
+    async def _execute_hook(self, command: str, context: HookContext, log_source: LogSource) -> bool:
         """Execute a single hook command."""
         if not command or not command.strip():
             logger.debug("Hook command is empty, skipping")
@@ -73,7 +76,7 @@ class HookExecutor:
 
         logger.info("Executing hook: %s", command.strip().split("\n")[0][:100])
 
-        async with self._create_hook_environment(context) as hook_env:
+        async with self._create_hook_environment(context) as (session, hook_env):
             try:
                 # Execute the hook command using shell
                 process = await asyncio.create_subprocess_shell(
@@ -84,6 +87,12 @@ class HookExecutor:
                 )
 
                 try:
+                    # Determine which session to use for logging - prefer main session if available
+                    logging_session = self.main_session if self.main_session is not None else session
+
+                    # Create a logger with automatic source registration
+                    hook_logger = get_logger(f"hook.{context.lease_name}", log_source, logging_session)
+
                     # Stream output line-by-line for real-time logging
                     output_lines = []
 
@@ -94,7 +103,8 @@ class HookExecutor:
                                 break
                             line_decoded = line.decode().rstrip()
                             output_lines.append(line_decoded)
-                            logger.info("[Hook Output] %s", line_decoded)
+                            # Route hook output through the logging system
+                            hook_logger.info(line_decoded)
 
                     # Run output reading and process waiting concurrently with timeout
                     await asyncio.wait_for(asyncio.gather(read_output(), process.wait()), timeout=self.timeout)
@@ -104,8 +114,6 @@ class HookExecutor:
                         return True
                     else:
                         logger.error("Hook failed with return code %d", process.returncode)
-                        if output_lines:
-                            logger.error("Hook output: %s", "\n".join(output_lines))
                         return False
 
                 except asyncio.TimeoutError:
@@ -129,7 +137,7 @@ class HookExecutor:
             return True
 
         logger.info("Executing pre-lease hook for lease %s", context.lease_name)
-        return await self._execute_hook(self.config.pre_lease, context)
+        return await self._execute_hook(self.config.pre_lease, context, LogSource.BEFORE_LEASE_HOOK)
 
     async def execute_post_lease_hook(self, context: HookContext) -> bool:
         """Execute the post-lease hook."""
@@ -138,4 +146,4 @@ class HookExecutor:
             return True
 
         logger.info("Executing post-lease hook for lease %s", context.lease_name)
-        return await self._execute_hook(self.config.post_lease, context)
+        return await self._execute_hook(self.config.post_lease, context, LogSource.AFTER_LEASE_HOOK)

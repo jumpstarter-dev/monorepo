@@ -17,8 +17,7 @@ from jumpstarter_protocol import (
 )
 
 from .logging import LogHandler
-from jumpstarter.common import ExporterStatus, Metadata, TemporarySocket
-from jumpstarter.common.enums import LogSource
+from jumpstarter.common import ExporterStatus, LogSource, Metadata, TemporarySocket
 from jumpstarter.common.streams import StreamRequestMetadata
 from jumpstarter.driver import Driver
 from jumpstarter.streams.common import forward_stream
@@ -73,6 +72,9 @@ class Session(
         self._logging_queue = deque(maxlen=32)
         self._logging_handler = LogHandler(self._logging_queue, LogSource.SYSTEM)
         self._status_update_event = Event()
+
+        # Map all driver logs to DRIVER source
+        self._logging_handler.add_child_handler("driver.", LogSource.DRIVER)
 
     @asynccontextmanager
     async def serve_port_async(self, port):
@@ -152,6 +154,18 @@ class Session(
         else:
             self._current_status = status
         self._status_message = message
+
+    def add_logger_source(self, logger_name: str, source: LogSource):
+        """Add a log source mapping for a specific logger."""
+        self._logging_handler.add_child_handler(logger_name, source)
+
+    def remove_logger_source(self, logger_name: str):
+        """Remove a log source mapping for a specific logger."""
+        self._logging_handler.remove_child_handler(logger_name)
+
+    def context_log_source(self, logger_name: str, source: LogSource):
+        """Context manager to temporarily set a log source for a specific logger."""
+        return self._logging_handler.context_log_source(logger_name, source)
 
     async def GetStatus(self, request, context):
         """Get the current exporter status."""
