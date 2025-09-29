@@ -22,7 +22,7 @@ from jumpstarter_protocol import (
     jumpstarter_pb2_grpc,
 )
 
-from jumpstarter.common import Metadata
+from jumpstarter.common import ExporterStatus, Metadata
 from jumpstarter.common.streams import connect_router_stream
 from jumpstarter.config.tls import TLSConfigV1Alpha1
 from jumpstarter.driver import Driver
@@ -47,6 +47,8 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     _tg: TaskGroup | None = field(init=False, default=None)
     _current_client_name: str = field(init=False, default="")
     _pre_lease_ready: Event | None = field(init=False, default=None)
+    _current_status: ExporterStatus = field(init=False, default=ExporterStatus.OFFLINE)
+    _current_session: Session | None = field(init=False, default=None)
 
     def stop(self, wait_for_lease_exit=False, should_unregister=False):
         """Signal the exporter to stop.
@@ -56,6 +58,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             should_unregister (bool): If True, unregister from controller. Otherwise rely on heartbeat.
         """
 
+        # Stop immediately if not started yet or if immediate stop is requested
         if (not self._started or not wait_for_lease_exit) and self._tg is not None:
             logger.info("Stopping exporter immediately, unregister from controller=%s", should_unregister)
             self._unregister = should_unregister
@@ -63,6 +66,26 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         elif not self._stop_requested:
             self._stop_requested = True
             logger.info("Exporter marked for stop upon lease exit")
+
+    async def _update_status(self, status: ExporterStatus, message: str = ""):
+        """Update exporter status with the controller and session."""
+        self._current_status = status
+
+        # Update session status if available
+        if self._current_session:
+            self._current_session.update_status(status, message)
+
+        try:
+            controller = jumpstarter_pb2_grpc.ControllerServiceStub(await self.channel_factory())
+            await controller.UpdateStatus(
+                jumpstarter_pb2.UpdateStatusRequest(
+                    status=status.to_proto(),
+                    status_message=message,
+                )
+            )
+            logger.info(f"Updated status to {status}: {message}")
+        except Exception as e:
+            logger.error(f"Failed to update status: {e}")
 
     @asynccontextmanager
     async def __asynccontextmanager__(self) -> AsyncGenerator[Self]:
@@ -77,6 +100,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                             channel = await self.channel_factory()
                             try:
                                 controller = jumpstarter_pb2_grpc.ControllerServiceStub(channel)
+                                await self._update_status(ExporterStatus.OFFLINE, "Exporter shutting down")
                                 await controller.Unregister(
                                     jumpstarter_pb2.UnregisterRequest(
                                         reason="Exporter shutdown",
@@ -109,20 +133,27 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             labels=self.labels,
             root_device=self.device_factory(),
         ) as session:
-            async with session.serve_unix_async() as path:
-                async with grpc.aio.secure_channel(
-                    f"unix://{path}", grpc.local_channel_credentials(grpc.LocalConnectionType.UDS)
-                ) as channel:
-                    response = await jumpstarter_pb2_grpc.ExporterServiceStub(channel).GetReport(empty_pb2.Empty())
-                    logger.info("Registering exporter with controller")
-                    await controller.Register(
-                        jumpstarter_pb2.RegisterRequest(
-                            labels=self.labels,
-                            reports=response.reports,
+            # Store session reference for status updates
+            self._current_session = session
+            try:
+                async with session.serve_unix_async() as path:
+                    async with grpc.aio.secure_channel(
+                        f"unix://{path}", grpc.local_channel_credentials(grpc.LocalConnectionType.UDS)
+                    ) as channel:
+                        response = await jumpstarter_pb2_grpc.ExporterServiceStub(channel).GetReport(empty_pb2.Empty())
+                        logger.info("Registering exporter with controller")
+                        await controller.Register(
+                            jumpstarter_pb2.RegisterRequest(
+                                labels=self.labels,
+                                reports=response.reports,
+                            )
                         )
-                    )
-                    self.registered = True
-                yield path
+                        self.registered = True
+                        await self._update_status(ExporterStatus.AVAILABLE, "Exporter registered and available")
+                    yield path
+            finally:
+                # Clear session reference
+                self._current_session = None
 
     async def handle(self, lease_name, tg):
         logger.info("Listening for incoming connection requests on lease %s", lease_name)
@@ -208,7 +239,9 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                         )
                         # Shield the post-lease hook from cancellation and await it
                         with CancelScope(shield=True):
+                            await self._update_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
                             await self.hook_executor.execute_post_lease_hook(hook_context)
+                            await self._update_status(ExporterStatus.AVAILABLE, "Available for new lease")
 
                     self.lease_name = status.lease_name
                     logger.info("Lease status changed, killing existing connections")
@@ -241,20 +274,29 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                             )
 
                             # Start pre-lease hook asynchronously
-                            async def run_pre_lease_hook():
+                            async def run_before_lease_hook(hook_ctx):
                                 try:
-                                    await self.hook_executor.execute_pre_lease_hook(hook_context)
-                                    logger.info("Pre-lease hook completed successfully")
+                                    await self._update_status(
+                                        ExporterStatus.BEFORE_LEASE_HOOK, "Running beforeLease hooks"
+                                    )
+                                    await self.hook_executor.execute_pre_lease_hook(hook_ctx)
+                                    await self._update_status(ExporterStatus.LEASE_READY, "Ready for commands")
+                                    logger.info("beforeLease hook completed successfully")
                                 except Exception as e:
-                                    logger.error("Pre-lease hook failed: %s", e)
+                                    logger.error("beforeLease hook failed: %s", e)
+                                    # Still transition to ready even if hook fails
+                                    await self._update_status(
+                                        ExporterStatus.LEASE_READY, f"Ready (beforeLease hook failed: {e})"
+                                    )
                                 finally:
                                     # Always set the event to unblock connections
                                     if self._pre_lease_ready:
                                         self._pre_lease_ready.set()
 
-                            tg.start_soon(run_pre_lease_hook)
+                            tg.start_soon(run_before_lease_hook, hook_context)
                         else:
                             # No hook configured, set event immediately
+                            await self._update_status(ExporterStatus.LEASE_READY, "Ready for commands")
                             if self._pre_lease_ready:
                                 self._pre_lease_ready.set()
                 else:
@@ -268,7 +310,9 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                         )
                         # Shield the post-lease hook from cancellation and await it
                         with CancelScope(shield=True):
+                            await self._update_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
                             await self.hook_executor.execute_post_lease_hook(hook_context)
+                            await self._update_status(ExporterStatus.AVAILABLE, "Available for new lease")
 
                     self._current_client_name = ""
                     # Reset event for next lease

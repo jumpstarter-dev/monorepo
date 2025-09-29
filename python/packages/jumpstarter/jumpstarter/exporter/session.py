@@ -17,7 +17,8 @@ from jumpstarter_protocol import (
 )
 
 from .logging import LogHandler
-from jumpstarter.common import Metadata, TemporarySocket
+from jumpstarter.common import ExporterStatus, Metadata, TemporarySocket
+from jumpstarter.common.enums import LogSource
 from jumpstarter.common.streams import StreamRequestMetadata
 from jumpstarter.driver import Driver
 from jumpstarter.streams.common import forward_stream
@@ -39,6 +40,9 @@ class Session(
 
     _logging_queue: deque = field(init=False)
     _logging_handler: QueueHandler = field(init=False)
+    _current_status: ExporterStatus = field(init=False, default=ExporterStatus.AVAILABLE)
+    _status_message: str = field(init=False, default="")
+    _status_update_event: Event = field(init=False)
 
     @contextmanager
     def __contextmanager__(self) -> Generator[Self]:
@@ -67,7 +71,8 @@ class Session(
         self.mapping = {u: i for (u, _, _, i) in self.root_device.enumerate()}
 
         self._logging_queue = deque(maxlen=32)
-        self._logging_handler = LogHandler(self._logging_queue)
+        self._logging_handler = LogHandler(self._logging_queue, LogSource.SYSTEM)
+        self._status_update_event = Event()
 
     @asynccontextmanager
     async def serve_port_async(self, port):
@@ -139,3 +144,19 @@ class Session(
                 yield self._logging_queue.popleft()
             except IndexError:
                 await sleep(0.5)
+
+    def update_status(self, status: int | ExporterStatus, message: str = ""):
+        """Update the current exporter status for the session."""
+        if isinstance(status, int):
+            self._current_status = ExporterStatus.from_proto(status)
+        else:
+            self._current_status = status
+        self._status_message = message
+
+    async def GetStatus(self, request, context):
+        """Get the current exporter status."""
+        logger.debug("GetStatus() -> %s", self._current_status)
+        return jumpstarter_pb2.GetStatusResponse(
+            status=self._current_status.to_proto(),
+            status_message=self._status_message,
+        )

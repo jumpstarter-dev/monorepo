@@ -14,7 +14,7 @@ from grpc.aio import AioRpcError
 from jumpstarter_protocol import jumpstarter_pb2, jumpstarter_pb2_grpc, router_pb2_grpc
 from rich.logging import RichHandler
 
-from jumpstarter.common import Metadata
+from jumpstarter.common import ExporterStatus, Metadata
 from jumpstarter.common.exceptions import JumpstarterException
 from jumpstarter.common.resources import ResourceMetadata
 from jumpstarter.common.serde import decode_value, encode_value
@@ -48,6 +48,12 @@ class DriverInvalidArgument(DriverError, ValueError):
     """
 
 
+class ExporterNotReady(DriverError):
+    """
+    Raised when the exporter is not ready to accept driver calls
+    """
+
+
 @dataclass(kw_only=True)
 class AsyncDriverClient(
     Metadata,
@@ -76,8 +82,27 @@ class AsyncDriverClient(
             handler = RichHandler()
             self.logger.addHandler(handler)
 
+    async def check_exporter_status(self):
+        """Check if the exporter is ready to accept driver calls"""
+        try:
+            response = await self.stub.GetStatus(jumpstarter_pb2.GetStatusRequest())
+            status = ExporterStatus.from_proto(response.status)
+
+            if status != ExporterStatus.LEASE_READY:
+                raise ExporterNotReady(f"Exporter status is {status}: {response.status_message}")
+
+        except AioRpcError as e:
+            # If GetStatus is not implemented, assume ready for backward compatibility
+            if e.code() == StatusCode.UNIMPLEMENTED:
+                self.logger.debug("GetStatus not implemented, assuming exporter is ready")
+                return
+            raise DriverError(f"Failed to check exporter status: {e.details()}") from e
+
     async def call_async(self, method, *args):
         """Make DriverCall by method name and arguments"""
+
+        # Check exporter status before making the call
+        await self.check_exporter_status()
 
         request = jumpstarter_pb2.DriverCallRequest(
             uuid=str(self.uuid),
@@ -104,6 +129,9 @@ class AsyncDriverClient(
 
     async def streamingcall_async(self, method, *args):
         """Make StreamingDriverCall by method name and arguments"""
+
+        # Check exporter status before making the call
+        await self.check_exporter_status()
 
         request = jumpstarter_pb2.StreamingDriverCallRequest(
             uuid=str(self.uuid),
