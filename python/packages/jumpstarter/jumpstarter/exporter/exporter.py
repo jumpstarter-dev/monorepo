@@ -26,7 +26,7 @@ from jumpstarter.common import ExporterStatus, Metadata
 from jumpstarter.common.streams import connect_router_stream
 from jumpstarter.config.tls import TLSConfigV1Alpha1
 from jumpstarter.driver import Driver
-from jumpstarter.exporter.hooks import HookContext, HookExecutor
+from jumpstarter.exporter.hooks import HookContext, HookExecutionError, HookExecutor
 from jumpstarter.exporter.session import Session
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     _pre_lease_ready: Event | None = field(init=False, default=None)
     _current_status: ExporterStatus = field(init=False, default=ExporterStatus.OFFLINE)
     _current_session: Session | None = field(init=False, default=None)
+    _session_socket_path: str | None = field(init=False, default=None)
 
     def stop(self, wait_for_lease_exit=False, should_unregister=False):
         """Signal the exporter to stop.
@@ -183,13 +184,18 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
         tg.start_soon(listen)
 
-        # Wait for pre-lease hook to complete before processing connections
-        if self._pre_lease_ready is not None:
-            logger.info("Waiting for pre-lease hook to complete before accepting connections")
-            await self._pre_lease_ready.wait()
-            logger.info("Pre-lease hook completed, now accepting connections")
-
+        # Create session before hooks run
         async with self.session() as path:
+            # Store socket path for hook execution
+            self._session_socket_path = path
+
+            # Wait for before-lease hook to complete before processing connections
+            if self._pre_lease_ready is not None:
+                logger.info("Waiting for before-lease hook to complete before accepting connections")
+                await self._pre_lease_ready.wait()
+                logger.info("before-lease hook completed, now accepting connections")
+
+            # Process client connections
             async for request in listen_rx:
                 logger.info("Handling new connection request on lease %s", lease_name)
                 tg.start_soon(
@@ -231,19 +237,15 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             tg.start_soon(status)
             async for status in status_rx:
                 if self.lease_name != "" and self.lease_name != status.lease_name:
-                    # Post-lease hook for the previous lease
+                    # After-lease hook for the previous lease
                     if self.hook_executor and self._current_client_name:
                         hook_context = HookContext(
                             lease_name=self.lease_name,
                             client_name=self._current_client_name,
                         )
-                        # Shield the post-lease hook from cancellation and await it
+                        # Shield the after-lease hook from cancellation and await it
                         with CancelScope(shield=True):
-                            await self._update_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
-                            # Pass the current session to hook executor for logging
-                            self.hook_executor.main_session = self._current_session
-                            await self.hook_executor.execute_post_lease_hook(hook_context)
-                            await self._update_status(ExporterStatus.AVAILABLE, "Available for new lease")
+                            await self.run_after_lease_hook(hook_context)
 
                     self.lease_name = status.lease_name
                     logger.info("Lease status changed, killing existing connections")
@@ -267,37 +269,14 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                     logger.info("Currently leased by %s under %s", status.client_name, status.lease_name)
                     self._current_client_name = status.client_name
 
-                    # Pre-lease hook when transitioning from unleased to leased
+                    # Before-lease hook when transitioning from unleased to leased
                     if not previous_leased:
                         if self.hook_executor:
                             hook_context = HookContext(
                                 lease_name=status.lease_name,
                                 client_name=status.client_name,
                             )
-
-                            # Start pre-lease hook asynchronously
-                            async def run_before_lease_hook(hook_ctx):
-                                try:
-                                    await self._update_status(
-                                        ExporterStatus.BEFORE_LEASE_HOOK, "Running beforeLease hooks"
-                                    )
-                                    # Pass the current session to hook executor for logging
-                                    self.hook_executor.main_session = self._current_session
-                                    await self.hook_executor.execute_pre_lease_hook(hook_ctx)
-                                    await self._update_status(ExporterStatus.LEASE_READY, "Ready for commands")
-                                    logger.info("beforeLease hook completed successfully")
-                                except Exception as e:
-                                    logger.error("beforeLease hook failed: %s", e)
-                                    # Still transition to ready even if hook fails
-                                    await self._update_status(
-                                        ExporterStatus.LEASE_READY, f"Ready (beforeLease hook failed: {e})"
-                                    )
-                                finally:
-                                    # Always set the event to unblock connections
-                                    if self._pre_lease_ready:
-                                        self._pre_lease_ready.set()
-
-                            tg.start_soon(run_before_lease_hook, hook_context)
+                            tg.start_soon(self.run_before_lease_hook, self, hook_context)
                         else:
                             # No hook configured, set event immediately
                             await self._update_status(ExporterStatus.LEASE_READY, "Ready for commands")
@@ -306,18 +285,21 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                 else:
                     logger.info("Currently not leased")
 
-                    # Post-lease hook when transitioning from leased to unleased
+                    # After-lease hook when transitioning from leased to unleased
                     if previous_leased and self.hook_executor and self._current_client_name:
                         hook_context = HookContext(
                             lease_name=self.lease_name,
                             client_name=self._current_client_name,
                         )
-                        # Shield the post-lease hook from cancellation and await it
+                        # Shield the after-lease hook from cancellation and await it
                         with CancelScope(shield=True):
                             await self._update_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
                             # Pass the current session to hook executor for logging
                             self.hook_executor.main_session = self._current_session
-                            await self.hook_executor.execute_post_lease_hook(hook_context)
+                            # Use session socket if available, otherwise create new session
+                            await self.hook_executor.execute_after_lease_hook(
+                                hook_context, socket_path=self._session_socket_path
+                            )
                             await self._update_status(ExporterStatus.AVAILABLE, "Available for new lease")
 
                     self._current_client_name = ""
@@ -330,3 +312,69 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
                 self._previous_leased = current_leased
         self._tg = None
+
+    async def run_before_lease_hook(self, hook_ctx: HookContext):
+        """
+        Execute the before-lease hook for the current exporter session.
+
+        Args:
+            hook_ctx (HookContext): The current hook execution context
+        """
+        try:
+            await self._update_status(ExporterStatus.BEFORE_LEASE_HOOK, "Running beforeLease hooks")
+            # Pass the current session to hook executor for logging
+            self.hook_executor.main_session = self._current_session
+
+            # Wait for socket path to be available
+            while self._session_socket_path is None:
+                await sleep(0.1)
+
+            # Execute hook with main session socket
+            await self.hook_executor.execute_before_lease_hook(hook_ctx, socket_path=self._session_socket_path)
+            await self._update_status(ExporterStatus.LEASE_READY, "Ready for commands")
+            logger.info("beforeLease hook completed successfully")
+        except HookExecutionError as e:
+            # Hook failed with on_failure='block' - end lease and set failed status
+            logger.error("beforeLease hook failed (on_failure=block): %s", e)
+            await self._update_status(
+                ExporterStatus.BEFORE_LEASE_HOOK_FAILED, f"beforeLease hook failed (on_failure=block): {e}"
+            )
+            # Note: We don't take the exporter offline for before_lease hook failures
+            # The lease is simply not ready, and the exporter remains available for future leases
+        except Exception as e:
+            # Unexpected error during hook execution
+            logger.error("beforeLease hook failed with unexpected error: %s", e, exc_info=True)
+            await self._update_status(ExporterStatus.BEFORE_LEASE_HOOK_FAILED, f"beforeLease hook failed: {e}")
+        finally:
+            # Always set the event to unblock connections
+            if self._pre_lease_ready:
+                self._pre_lease_ready.set()
+
+    async def run_after_lease_hook(self, hook_ctx: HookContext):
+        """
+        Execute the after-lease hook for the current exporter session.
+
+        Args:
+            hook_ctx (HookContext): The current hook execution context
+        """
+        try:
+            await self._update_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
+            # Pass the current session to hook executor for logging
+            self.hook_executor.main_session = self._current_session
+            # Use session socket if available, otherwise create new session
+            await self.hook_executor.execute_after_lease_hook(hook_ctx, socket_path=self._session_socket_path)
+            await self._update_status(ExporterStatus.AVAILABLE, "Available for new lease")
+            logger.info("afterLease hook completed successfully")
+        except HookExecutionError as e:
+            # Hook failed with on_failure='block' - set failed status and shut down exporter
+            logger.error("afterLease hook failed (on_failure=block): %s", e)
+            await self._update_status(
+                ExporterStatus.AFTER_LEASE_HOOK_FAILED, f"afterLease hook failed (on_failure=block): {e}"
+            )
+            # Shut down the exporter after after_lease hook failure with on_failure='block'
+            logger.error("Shutting down exporter due to afterLease hook failure")
+            self.stop()
+        except Exception as e:
+            # Unexpected error during hook execution
+            logger.error("afterLease hook failed with unexpected error: %s", e, exc_info=True)
+            await self._update_status(ExporterStatus.AFTER_LEASE_HOOK_FAILED, f"afterLease hook failed: {e}")

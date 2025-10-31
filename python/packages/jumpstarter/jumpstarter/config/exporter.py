@@ -18,14 +18,31 @@ from jumpstarter.common.importlib import import_class
 from jumpstarter.driver import Driver
 
 
+class HookInstanceConfigV1Alpha1(BaseModel):
+    """Configuration for a specific lifecycle hook."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    script: str = Field(alias="script", description="The j script to execute for this hook")
+    timeout: int = Field(default=120, description="The hook execution timeout in seconds (default: 120s)")
+    exit_code: int = Field(alias="exitCode", default=0, description="The expected exit code (default: 0)")
+    on_failure: Literal["pass", "block", "warn"] = Field(
+        default="pass",
+        alias="onFailure",
+        description=(
+            "Action to take when the expected exit code is not returned: 'pass' continues normally, "
+            "'block' takes the exporter offline and blocks leases, 'warn' continues and prints a warning"
+        ),
+    )
+
+
 class HookConfigV1Alpha1(BaseModel):
     """Configuration for lifecycle hooks."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    pre_lease: str | None = Field(default=None, alias="preLease")
-    post_lease: str | None = Field(default=None, alias="postLease")
-    timeout: int = Field(default=300, description="Hook execution timeout in seconds")
+    before_lease: HookInstanceConfigV1Alpha1 | None = Field(default=None, alias="beforeLease")
+    after_lease: HookInstanceConfigV1Alpha1 | None = Field(default=None, alias="afterLease")
 
 
 class ExporterConfigV1Alpha1DriverInstanceProxy(BaseModel):
@@ -62,7 +79,7 @@ class ExporterConfigV1Alpha1DriverInstance(RootModel):
                     description=self.root.description,
                     methods_description=self.root.methods_description,
                     children=children,
-                    **self.root.config
+                    **self.root.config,
                 )
 
             case ExporterConfigV1Alpha1DriverInstanceComposite():
@@ -198,7 +215,7 @@ class ExporterConfigV1Alpha1(BaseModel):
 
         # Create hook executor if hooks are configured
         hook_executor = None
-        if self.hooks.pre_lease or self.hooks.post_lease:
+        if self.hooks.before_lease or self.hooks.after_lease:
             from jumpstarter.exporter.hooks import HookExecutor
 
             hook_executor = HookExecutor(

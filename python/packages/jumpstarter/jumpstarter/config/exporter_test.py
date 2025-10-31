@@ -116,13 +116,16 @@ metadata:
 endpoint: "jumpstarter.my-lab.com:1443"
 token: "test-token"
 hooks:
-  preLease: |
-    echo "Pre-lease hook for $LEASE_NAME"
-    j power on
-  postLease: |
-    echo "Post-lease hook for $LEASE_NAME"
-    j power off
-  timeout: 600
+  beforeLease:
+    script: |
+      echo "Pre-lease hook for $LEASE_NAME"
+      j power on
+    timeout: 600
+  afterLease:
+    script: |
+      echo "Post-lease hook for $LEASE_NAME"
+      j power off
+    timeout: 600
 export:
   power:
     type: "jumpstarter_driver_power.driver.PduPower"
@@ -134,22 +137,20 @@ export:
 
     config = ExporterConfigV1Alpha1.load("test-hooks")
 
-    assert config.hooks.pre_lease == 'echo "Pre-lease hook for $LEASE_NAME"\nj power on\n'
-    assert config.hooks.post_lease == 'echo "Post-lease hook for $LEASE_NAME"\nj power off\n'
-    assert config.hooks.timeout == 600
+    assert config.hooks.before_lease.script == 'echo "Pre-lease hook for $LEASE_NAME"\nj power on\n'
+    assert config.hooks.after_lease.script == 'echo "Post-lease hook for $LEASE_NAME"\nj power off\n'
 
     # Test that it round-trips correctly
     path.unlink()
     ExporterConfigV1Alpha1.save(config)
     reloaded_config = ExporterConfigV1Alpha1.load("test-hooks")
 
-    assert reloaded_config.hooks.pre_lease == config.hooks.pre_lease
-    assert reloaded_config.hooks.post_lease == config.hooks.post_lease
-    assert reloaded_config.hooks.timeout == config.hooks.timeout
+    assert reloaded_config.hooks.before_lease.script == config.hooks.before_lease.script
+    assert reloaded_config.hooks.after_lease.script == config.hooks.after_lease.script
 
     # Test that the YAML uses camelCase
     yaml_output = ExporterConfigV1Alpha1.dump_yaml(config)
-    assert "preLease:" in yaml_output
-    assert "postLease:" in yaml_output
-    assert "pre_lease:" not in yaml_output
-    assert "post_lease:" not in yaml_output
+    assert "beforeLease:" in yaml_output
+    assert "afterLease:" in yaml_output
+    assert "before_lease:" not in yaml_output
+    assert "after_lease:" not in yaml_output
