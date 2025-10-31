@@ -2,14 +2,11 @@ import logging
 from collections import deque
 from contextlib import contextmanager
 from threading import RLock
-from typing import TYPE_CHECKING
 
 from jumpstarter_protocol import jumpstarter_pb2
 
+from .logging_protocol import LoggerRegistration
 from jumpstarter.common import LogSource
-
-if TYPE_CHECKING:
-    from .session import Session
 
 
 class LogHandler(logging.Handler):
@@ -69,7 +66,9 @@ class LogHandler(logging.Handler):
             self.remove_child_handler(logger_name)
 
 
-def get_logger(name: str, source: LogSource = LogSource.SYSTEM, session: "Session" = None) -> logging.Logger:
+def get_logger(
+    name: str, source: LogSource = LogSource.SYSTEM, session: LoggerRegistration | None = None
+) -> logging.Logger:
     """
     Get a logger with automatic LogSource mapping.
 
