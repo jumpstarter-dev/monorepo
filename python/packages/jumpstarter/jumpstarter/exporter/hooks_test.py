@@ -384,9 +384,9 @@ class TestHookExecutor:
                 executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
                 result = await executor.execute_before_lease_hook(hook_context)
                 assert result is True
-                # Verify INFO log was created
+                # Verify INFO log was created (using format string)
                 mock_logger.info.assert_any_call(
-                    "Hook failed: expected exit code 0, got 1 (on_failure=pass, continuing)"
+                    "%s (on_failure=pass, continuing)", "Hook failed: expected exit code 0, got 1"
                 )
 
     async def test_hook_exit_code_mismatch_warn(self, mock_device_factory, hook_context):
@@ -413,9 +413,9 @@ class TestHookExecutor:
                 executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
                 result = await executor.execute_before_lease_hook(hook_context)
                 assert result is True
-                # Verify WARNING log was created
+                # Verify WARNING log was created (using format string)
                 mock_logger.warning.assert_any_call(
-                    "Hook failed: expected exit code 0, got 1 (on_failure=warn, continuing)"
+                    "%s (on_failure=warn, continuing)", "Hook failed: expected exit code 0, got 1"
                 )
 
     async def test_hook_exit_code_mismatch_block(self, mock_device_factory, hook_context):

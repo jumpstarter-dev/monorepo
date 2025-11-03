@@ -76,7 +76,7 @@ class HookExecutor:
         context: HookContext,
         log_source: LogSource,
         socket_path: str | None = None,
-    ) -> bool:
+    ):
         """Execute a single hook command.
 
         Args:
@@ -89,7 +89,7 @@ class HookExecutor:
         command = hook_config.script
         if not command or not command.strip():
             logger.debug("Hook command is empty, skipping")
-            return True
+            return
 
         logger.info("Executing hook: %s", command.strip().split("\n")[0][:100])
 
@@ -129,7 +129,7 @@ class HookExecutor:
         log_source: LogSource,
         hook_env: dict,
         logging_session: Session,
-    ) -> bool:
+    ):
         """Execute the hook process with the given environment and logging session."""
         command = hook_config.script
         timeout = hook_config.timeout
@@ -168,22 +168,22 @@ class HookExecutor:
                 # Check if exit code matches expected
                 if process.returncode == expected_exit_code:
                     logger.info("Hook executed successfully with exit code %d", process.returncode)
-                    return True
+                    return
                 else:
                     # Exit code mismatch - handle according to on_failure setting
                     error_msg = f"Hook failed: expected exit code {expected_exit_code}, got {process.returncode}"
 
                     if on_failure == "pass":
                         logger.info("%s (on_failure=pass, continuing)", error_msg)
-                        return True
+                        return
                     elif on_failure == "warn":
                         logger.warning("%s (on_failure=warn, continuing)", error_msg)
-                        return True
+                        return
                     else:  # on_failure == "block"
                         logger.error("%s (on_failure=block, raising exception)", error_msg)
                         raise HookExecutionError(error_msg)
 
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as e:
                 error_msg = f"Hook timed out after {timeout} seconds"
                 logger.error(error_msg)
                 try:
@@ -196,12 +196,12 @@ class HookExecutor:
                 # Handle timeout according to on_failure setting
                 if on_failure == "pass":
                     logger.info("%s (on_failure=pass, continuing)", error_msg)
-                    return True
+                    return
                 elif on_failure == "warn":
                     logger.warning("%s (on_failure=warn, continuing)", error_msg)
-                    return True
+                    return
                 else:  # on_failure == "block"
-                    raise HookExecutionError(error_msg)
+                    raise HookExecutionError(error_msg) from e
 
         except HookExecutionError:
             # Re-raise HookExecutionError to propagate to exporter
@@ -213,14 +213,14 @@ class HookExecutor:
             # Handle exception according to on_failure setting
             if on_failure == "pass":
                 logger.info("%s (on_failure=pass, continuing)", error_msg)
-                return True
+                return
             elif on_failure == "warn":
                 logger.warning("%s (on_failure=warn, continuing)", error_msg)
-                return True
+                return
             else:  # on_failure == "block"
                 raise HookExecutionError(error_msg) from e
 
-    async def execute_before_lease_hook(self, context: HookContext, socket_path: str | None = None) -> bool:
+    async def execute_before_lease_hook(self, context: HookContext, socket_path: str | None = None):
         """Execute the before-lease hook.
 
         Args:
@@ -232,17 +232,17 @@ class HookExecutor:
         """
         if not self.config.before_lease:
             logger.debug("No before-lease hook configured")
-            return True
+            return
 
         logger.info("Executing before-lease hook for lease %s", context.lease_name)
-        return await self._execute_hook(
+        await self._execute_hook(
             self.config.before_lease,
             context,
             LogSource.BEFORE_LEASE_HOOK,
             socket_path,
         )
 
-    async def execute_after_lease_hook(self, context: HookContext, socket_path: str | None = None) -> bool:
+    async def execute_after_lease_hook(self, context: HookContext, socket_path: str | None = None):
         """Execute the after-lease hook.
 
         Args:
@@ -254,10 +254,10 @@ class HookExecutor:
         """
         if not self.config.after_lease:
             logger.debug("No after-lease hook configured")
-            return True
+            return
 
         logger.info("Executing after-lease hook for lease %s", context.lease_name)
-        return await self._execute_hook(
+        await self._execute_hook(
             self.config.after_lease,
             context,
             LogSource.AFTER_LEASE_HOOK,
