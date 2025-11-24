@@ -175,8 +175,12 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
         # Stop immediately if not started yet or if immediate stop is requested
         if (not self._started or not wait_for_lease_exit) and self._tg is not None:
-            logger.info("Stopping exporter immediately, unregister from controller=%s", should_unregister)
+            if should_unregister:
+                logger.info("Stopping exporter immediately, unregistering from controller")
+            else:
+                logger.info("Stopping exporter immediately, will not unregister from controller")
             self._unregister = should_unregister
+            # Cancel any ongoing tasks
             self._tg.cancel_scope.cancel()
         elif not self._stop_requested:
             self._stop_requested = True
@@ -228,14 +232,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     def _listen_stream_factory(
         self, lease_name: str
     ) -> Callable[[jumpstarter_pb2_grpc.ControllerServiceStub], AsyncGenerator[jumpstarter_pb2.ListenResponse, None]]:
-        """Create a stream factory for listening to connection requests.
-
-        Args:
-            lease_name: The lease name to listen for
-
-        Returns:
-            A factory function that creates a Listen stream when given a ControllerServiceStub
-        """
+        """Create a stream factory for listening to connection requests."""
 
         def factory(
             ctrl: jumpstarter_pb2_grpc.ControllerServiceStub,
@@ -247,11 +244,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     def _status_stream_factory(
         self,
     ) -> Callable[[jumpstarter_pb2_grpc.ControllerServiceStub], AsyncGenerator[jumpstarter_pb2.StatusResponse, None]]:
-        """Create a stream factory for status updates.
-
-        Returns:
-            A factory function that creates a Status stream when given a ControllerServiceStub
-        """
+        """Create a stream factory for status updates."""
 
         def factory(
             ctrl: jumpstarter_pb2_grpc.ControllerServiceStub,
@@ -260,24 +253,10 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
         return factory
 
-    def _create_hook_context(self, lease_name: str, client_name: str) -> HookContext:
-        """Create a standardized hook context.
-
-        Args:
-            lease_name: Name of the lease
-            client_name: Name of the client
-
-        Returns:
-            HookContext object with consistent fields
-        """
-        return HookContext(
-            lease_name=lease_name,
-            client_name=client_name,
-        )
-
     async def _register_with_controller(self, channel: grpc.aio.Channel):
         """Register the exporter with the controller."""
-        response = await jumpstarter_pb2_grpc.ExporterServiceStub(channel).GetReport(empty_pb2.Empty())
+        exporter_stub = jumpstarter_pb2_grpc.ExporterServiceStub(channel)
+        response: jumpstarter_pb2.GetReportResponse = await exporter_stub.GetReport(empty_pb2.Empty())
         logger.info("Registering exporter with controller")
         controller = jumpstarter_pb2_grpc.ControllerServiceStub(channel)
         await controller.Register(
@@ -286,7 +265,10 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                 reports=response.reports,
             )
         )
+        # Mark exporter as registered internally
         self._registered = True
+        # Report that exporter is available to the controller
+        # TODO: Determine if the controller should handle this logic internally
         await self._report_status(ExporterStatus.AVAILABLE, "Exporter registered and available")
 
     async def _report_status(self, status: ExporterStatus, message: str = ""):
@@ -472,12 +454,11 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                 self._status_stream_factory(),
                 status_tx,
             )
-            # Type: status is jumpstarter_pb2.StatusResponse with lease_name and other status fields
             async for status in status_rx:
                 if self._lease_name != "" and self._lease_name != status.lease_name:
                     # After-lease hook for the previous lease (lease name changed)
                     if self.hook_executor and self._current_client_name:
-                        hook_context = self._create_hook_context(self._lease_name, self._current_client_name)
+                        hook_context = HookContext(self._lease_name, self._current_client_name)
                         # Shield the after-lease hook from cancellation and await it
                         with CancelScope(shield=True):
                             await self._report_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
@@ -527,7 +508,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                     # Before-lease hook when transitioning from unleased to leased
                     if not previous_leased:
                         if self.hook_executor:
-                            hook_context = self._create_hook_context(status.lease_name, status.client_name)
+                            hook_context = HookContext(status.lease_name, status.client_name)
                             tg.start_soon(self.run_before_lease_hook, hook_context)
                         else:
                             # No hook configured, set event immediately
@@ -539,7 +520,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
                     # After-lease hook when transitioning from leased to unleased
                     if previous_leased and self.hook_executor and self._current_client_name:
-                        hook_context = self._create_hook_context(self._lease_name, self._current_client_name)
+                        hook_context = HookContext(self._lease_name, self._current_client_name)
                         # Shield the after-lease hook from cancellation and await it
                         with CancelScope(shield=True):
                             await self._report_status(ExporterStatus.AFTER_LEASE_HOOK, "Running afterLease hooks")
