@@ -25,13 +25,16 @@ class HookInstanceConfigV1Alpha1(BaseModel):
 
     script: str = Field(alias="script", description="The j script to execute for this hook")
     timeout: int = Field(default=120, description="The hook execution timeout in seconds (default: 120s)")
-    exit_code: int = Field(alias="exitCode", default=0, description="The expected exit code (default: 0)")
-    on_failure: Literal["pass", "block", "warn"] = Field(
-        default="pass",
+    on_failure: Literal[
+        "warn",
+        "endLease",
+        "exit",
+    ] = Field(
+        default="warn",
         alias="onFailure",
         description=(
-            "Action to take when the expected exit code is not returned: 'pass' continues normally, "
-            "'block' takes the exporter offline and blocks leases, 'warn' continues and prints a warning"
+            "Action to take when the expected exit code is not returned: 'endLease' to end the lease, "
+            "'exit' takes the exporter offline and ends the lease, 'warn' continues and prints a warning"
         ),
     )
 

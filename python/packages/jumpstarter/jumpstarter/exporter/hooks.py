@@ -5,7 +5,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import AsyncGenerator, Callable
 
 from jumpstarter.common import LogSource
 from jumpstarter.config.env import JMP_DRIVERS_ALLOW, JUMPSTARTER_HOST
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class HookExecutionError(Exception):
-    """Raised when a hook fails and on_failure is set to 'block'."""
+    """Raised when a hook fails and on_failure is set to 'endLease' or 'exit'."""
 
     pass
 
@@ -42,8 +42,34 @@ class HookExecutor:
     device_factory: Callable[[], Driver]
     main_session: Session | None = field(default=None)
 
+    def _create_hook_env(self, context: HookContext, socket_path: str) -> dict[str, str]:
+        """Create standardized hook environment variables.
+
+        Args:
+            context: Hook context information
+            socket_path: Path to the Unix socket for JUMPSTARTER_HOST
+
+        Returns:
+            Dictionary of environment variables for hook execution
+        """
+        hook_env = os.environ.copy()
+        hook_env.update(
+            {
+                JUMPSTARTER_HOST: str(socket_path),
+                JMP_DRIVERS_ALLOW: "UNSAFE",  # Allow all drivers for local access
+                "LEASE_NAME": context.lease_name,
+                "CLIENT_NAME": context.client_name,
+                "LEASE_DURATION": context.lease_duration,
+                "EXPORTER_NAME": context.exporter_name,
+                "EXPORTER_NAMESPACE": context.exporter_namespace,
+            }
+        )
+        return hook_env
+
     @asynccontextmanager
-    async def _create_hook_environment(self, context: HookContext):
+    async def _create_hook_environment(
+        self, context: HookContext
+    ) -> AsyncGenerator[tuple[Session, dict[str, str]], None]:
         """Create a local session and Unix socket for j CLI access."""
         with Session(
             root_device=self.device_factory(),
@@ -55,18 +81,7 @@ class HookExecutor:
         ) as session:
             async with session.serve_unix_async() as unix_path:
                 # Create environment variables for the hook
-                hook_env = os.environ.copy()
-                hook_env.update(
-                    {
-                        JUMPSTARTER_HOST: str(unix_path),
-                        JMP_DRIVERS_ALLOW: "UNSAFE",  # Allow all drivers for local access
-                        "LEASE_NAME": context.lease_name,
-                        "CLIENT_NAME": context.client_name,
-                        "LEASE_DURATION": context.lease_duration,
-                        "EXPORTER_NAME": context.exporter_name,
-                        "EXPORTER_NAMESPACE": context.exporter_namespace,
-                    }
-                )
+                hook_env = self._create_hook_env(context, unix_path)
 
                 yield session, hook_env
 
@@ -76,11 +91,11 @@ class HookExecutor:
         context: HookContext,
         log_source: LogSource,
         socket_path: str | None = None,
-    ):
+    ) -> None:
         """Execute a single hook command.
 
         Args:
-            hook_config: Hook configuration including script, timeout, exit_code, and on_failure
+            hook_config: Hook configuration including script, timeout, and on_failure
             context: Hook context information
             log_source: Log source for hook output
             socket_path: Optional Unix socket path to reuse existing session.
@@ -96,18 +111,7 @@ class HookExecutor:
         # If socket_path provided, use existing session; otherwise create new one
         if socket_path is not None:
             # Reuse existing session - create environment without session creation
-            hook_env = os.environ.copy()
-            hook_env.update(
-                {
-                    JUMPSTARTER_HOST: str(socket_path),
-                    JMP_DRIVERS_ALLOW: "UNSAFE",
-                    "LEASE_NAME": context.lease_name,
-                    "CLIENT_NAME": context.client_name,
-                    "LEASE_DURATION": context.lease_duration,
-                    "EXPORTER_NAME": context.exporter_name,
-                    "EXPORTER_NAMESPACE": context.exporter_namespace,
-                }
-            )
+            hook_env = self._create_hook_env(context, socket_path)
 
             # Use main session for logging (must be available when socket_path is provided)
             logging_session = self.main_session
@@ -127,13 +131,12 @@ class HookExecutor:
         hook_config: HookInstanceConfigV1Alpha1,
         context: HookContext,
         log_source: LogSource,
-        hook_env: dict,
+        hook_env: dict[str, str],
         logging_session: Session,
-    ):
+    ) -> None:
         """Execute the hook process with the given environment and logging session."""
         command = hook_config.script
         timeout = hook_config.timeout
-        expected_exit_code = hook_config.exit_code
         on_failure = hook_config.on_failure
 
         try:
@@ -165,22 +168,22 @@ class HookExecutor:
                 # Run output reading and process waiting concurrently with timeout
                 await asyncio.wait_for(asyncio.gather(read_output(), process.wait()), timeout=timeout)
 
-                # Check if exit code matches expected
-                if process.returncode == expected_exit_code:
-                    logger.info("Hook executed successfully with exit code %d", process.returncode)
+                # Check if hook succeeded (exit code 0)
+                if process.returncode == 0:
+                    logger.info("Hook executed successfully")
                     return
                 else:
-                    # Exit code mismatch - handle according to on_failure setting
-                    error_msg = f"Hook failed: expected exit code {expected_exit_code}, got {process.returncode}"
+                    # Non-zero exit code is a failure - handle according to on_failure setting
+                    error_msg = f"Hook failed with exit code {process.returncode}"
 
-                    if on_failure == "pass":
-                        logger.info("%s (on_failure=pass, continuing)", error_msg)
-                        return
-                    elif on_failure == "warn":
+                    if on_failure == "warn":
                         logger.warning("%s (on_failure=warn, continuing)", error_msg)
                         return
-                    else:  # on_failure == "block"
-                        logger.error("%s (on_failure=block, raising exception)", error_msg)
+                    elif on_failure == "endLease":
+                        logger.error("%s (on_failure=endLease, raising exception)", error_msg)
+                        raise HookExecutionError(error_msg)
+                    else:  # on_failure == "exit"
+                        logger.error("%s (on_failure=exit, raising exception)", error_msg)
                         raise HookExecutionError(error_msg)
 
             except asyncio.TimeoutError as e:
@@ -194,13 +197,12 @@ class HookExecutor:
                     await process.wait()
 
                 # Handle timeout according to on_failure setting
-                if on_failure == "pass":
-                    logger.info("%s (on_failure=pass, continuing)", error_msg)
-                    return
-                elif on_failure == "warn":
+                if on_failure == "warn":
                     logger.warning("%s (on_failure=warn, continuing)", error_msg)
                     return
-                else:  # on_failure == "block"
+                elif on_failure == "endLease":
+                    raise HookExecutionError(error_msg) from e
+                else:  # on_failure == "exit"
                     raise HookExecutionError(error_msg) from e
 
         except HookExecutionError:
@@ -211,16 +213,15 @@ class HookExecutor:
             logger.error(error_msg, exc_info=True)
 
             # Handle exception according to on_failure setting
-            if on_failure == "pass":
-                logger.info("%s (on_failure=pass, continuing)", error_msg)
-                return
-            elif on_failure == "warn":
+            if on_failure == "warn":
                 logger.warning("%s (on_failure=warn, continuing)", error_msg)
                 return
-            else:  # on_failure == "block"
+            elif on_failure == "endLease":
+                raise HookExecutionError(error_msg) from e
+            else:  # on_failure == "exit"
                 raise HookExecutionError(error_msg) from e
 
-    async def execute_before_lease_hook(self, context: HookContext, socket_path: str | None = None):
+    async def execute_before_lease_hook(self, context: HookContext, socket_path: str | None = None) -> None:
         """Execute the before-lease hook.
 
         Args:
@@ -228,7 +229,7 @@ class HookExecutor:
             socket_path: Optional Unix socket path to reuse existing session
 
         Raises:
-            HookExecutionError: If hook fails and on_failure is set to 'block'
+            HookExecutionError: If hook fails and on_failure is set to 'endLease' or 'exit'
         """
         if not self.config.before_lease:
             logger.debug("No before-lease hook configured")
@@ -242,7 +243,7 @@ class HookExecutor:
             socket_path,
         )
 
-    async def execute_after_lease_hook(self, context: HookContext, socket_path: str | None = None):
+    async def execute_after_lease_hook(self, context: HookContext, socket_path: str | None = None) -> None:
         """Execute the after-lease hook.
 
         Args:
@@ -250,7 +251,7 @@ class HookExecutor:
             socket_path: Optional Unix socket path to reuse existing session
 
         Raises:
-            HookExecutionError: If hook fails and on_failure is set to 'block'
+            HookExecutionError: If hook fails and on_failure is set to 'endLease' or 'exit'
         """
         if not self.config.after_lease:
             logger.debug("No after-lease hook configured")

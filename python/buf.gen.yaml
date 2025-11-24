@@ -6,6 +6,10 @@ plugins:
     out: ./packages/jumpstarter-protocol/jumpstarter_protocol
   - remote: buf.build/grpc/python
     out: ./packages/jumpstarter-protocol/jumpstarter_protocol
+  - remote: buf.build/community/nipunn1313-mypy:v3.7.0
+    out: ./packages/jumpstarter-protocol/jumpstarter_protocol
+  - remote: buf.build/community/nipunn1313-mypy-grpc:v3.7.0
+    out: ./packages/jumpstarter-protocol/jumpstarter_protocol
 inputs:
   - git_repo: https://github.com/jumpstarter-dev/jumpstarter-protocol.git
     branch: main

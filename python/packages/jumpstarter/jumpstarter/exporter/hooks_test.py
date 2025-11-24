@@ -1,4 +1,5 @@
 import asyncio
+from typing import Callable
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
@@ -16,23 +17,23 @@ class MockDriver(Driver):
     def client(cls) -> str:
         return "test.MockClient"
 
-    def close(self):
+    def close(self) -> None:
         pass
 
-    def reset(self):
+    def reset(self) -> None:
         pass
 
 
 @pytest.fixture
-def mock_device_factory():
-    def factory():
+def mock_device_factory() -> Callable[[], MockDriver]:
+    def factory() -> MockDriver:
         return MockDriver()
 
     return factory
 
 
 @pytest.fixture
-def hook_config():
+def hook_config() -> HookConfigV1Alpha1:
     return HookConfigV1Alpha1(
         before_lease=HookInstanceConfigV1Alpha1(script="echo 'Pre-lease hook executed'", timeout=10),
         after_lease=HookInstanceConfigV1Alpha1(script="echo 'Post-lease hook executed'", timeout=10),
@@ -40,7 +41,7 @@ def hook_config():
 
 
 @pytest.fixture
-def hook_context():
+def hook_context() -> HookContext:
     return HookContext(
         lease_name="test-lease-123",
         client_name="test-client",
@@ -51,7 +52,7 @@ def hook_context():
 
 
 class TestHookExecutor:
-    async def test_hook_executor_creation(self, hook_config, mock_device_factory):
+    async def test_hook_executor_creation(self, hook_config, mock_device_factory) -> None:
         executor = HookExecutor(
             config=hook_config,
             device_factory=mock_device_factory,
@@ -60,18 +61,18 @@ class TestHookExecutor:
         assert executor.config == hook_config
         assert executor.device_factory == mock_device_factory
 
-    async def test_empty_hook_execution(self, mock_device_factory, hook_context):
+    async def test_empty_hook_execution(self, mock_device_factory, hook_context) -> None:
         empty_config = HookConfigV1Alpha1()
         executor = HookExecutor(
             config=empty_config,
             device_factory=mock_device_factory,
         )
 
-        # Both hooks should return True for empty/None commands
-        assert await executor.execute_before_lease_hook(hook_context) is True
-        assert await executor.execute_after_lease_hook(hook_context) is True
+        # Both hooks should return None for empty/None commands
+        assert await executor.execute_before_lease_hook(hook_context) is None
+        assert await executor.execute_after_lease_hook(hook_context) is None
 
-    async def test_successful_hook_execution(self, mock_device_factory, hook_context):
+    async def test_successful_hook_execution(self, mock_device_factory, hook_context) -> None:
         hook_config = HookConfigV1Alpha1(
             before_lease=HookInstanceConfigV1Alpha1(script="echo 'Pre-lease hook executed'", timeout=10),
         )
@@ -102,7 +103,7 @@ class TestHookExecutor:
 
                 result = await executor.execute_before_lease_hook(hook_context)
 
-                assert result is True
+                assert result is None
 
                 # Verify subprocess was called with correct environment
                 mock_subprocess.assert_called_once()
@@ -117,11 +118,11 @@ class TestHookExecutor:
                 assert env["LEASE_NAME"] == "test-lease-123"
                 assert env["CLIENT_NAME"] == "test-client"
 
-    async def test_failed_hook_execution(self, mock_device_factory, hook_context):
+    async def test_failed_hook_execution(self, mock_device_factory, hook_context) -> None:
         failed_config = HookConfigV1Alpha1(
             before_lease=HookInstanceConfigV1Alpha1(
-                script="exit 1", timeout=10, on_failure="block"
-            ),  # Command that will fail with on_failure="block"
+                script="exit 1", timeout=10, on_failure="endLease"
+            ),  # Command that will fail with on_failure="endLease"
         )
 
         with patch("jumpstarter.exporter.hooks.Session") as mock_session_class:
@@ -147,15 +148,15 @@ class TestHookExecutor:
                     device_factory=mock_device_factory,
                 )
 
-                # Should raise HookExecutionError since on_failure="block"
-                with pytest.raises(HookExecutionError, match="expected exit code 0, got 1"):
+                # Should raise HookExecutionError since on_failure="endLease"
+                with pytest.raises(HookExecutionError, match="Hook failed with exit code 1"):
                     await executor.execute_before_lease_hook(hook_context)
 
-    async def test_hook_timeout(self, mock_device_factory, hook_context):
+    async def test_hook_timeout(self, mock_device_factory, hook_context) -> None:
         timeout_config = HookConfigV1Alpha1(
             before_lease=HookInstanceConfigV1Alpha1(
-                script="sleep 60", timeout=1, on_failure="block"
-            ),  # Command that will timeout with on_failure="block"
+                script="sleep 60", timeout=1, on_failure="exit"
+            ),  # Command that will timeout with on_failure="exit"
         )
 
         with patch("jumpstarter.exporter.hooks.Session") as mock_session_class:
@@ -179,13 +180,13 @@ class TestHookExecutor:
                     device_factory=mock_device_factory,
                 )
 
-                # Should raise HookExecutionError since on_failure="block"
+                # Should raise HookExecutionError since on_failure="exit"
                 with pytest.raises(HookExecutionError, match="timed out after 1 seconds"):
                     await executor.execute_before_lease_hook(hook_context)
 
                 mock_process.terminate.assert_called_once()
 
-    async def test_hook_environment_variables(self, mock_device_factory, hook_context):
+    async def test_hook_environment_variables(self, mock_device_factory, hook_context) -> None:
         hook_config = HookConfigV1Alpha1(
             before_lease=HookInstanceConfigV1Alpha1(script="echo 'Pre-lease hook executed'", timeout=10),
         )
@@ -224,7 +225,7 @@ class TestHookExecutor:
                 assert env[JUMPSTARTER_HOST] == "/tmp/test_socket"
                 assert env[JMP_DRIVERS_ALLOW] == "UNSAFE"
 
-    async def test_real_time_output_logging(self, mock_device_factory, hook_context):
+    async def test_real_time_output_logging(self, mock_device_factory, hook_context) -> None:
         """Test that hook output is logged in real-time at INFO level."""
         hook_config = HookConfigV1Alpha1(
             before_lease=HookInstanceConfigV1Alpha1(
@@ -262,17 +263,17 @@ class TestHookExecutor:
 
                 result = await executor.execute_before_lease_hook(hook_context)
 
-                assert result is True
+                assert result is None
 
                 # Verify that output lines were logged in real-time at INFO level
                 expected_calls = [
                     call("Executing before-lease hook for lease %s", "test-lease-123"),
                     call("Executing hook: %s", "echo 'Line 1'; echo 'Line 2'; echo 'Line 3'"),
-                    call("Hook executed successfully with exit code %d", 0),
+                    call("Hook executed successfully"),
                 ]
                 mock_logger.info.assert_has_calls(expected_calls, any_order=False)
 
-    async def test_post_lease_hook_execution_on_completion(self, mock_device_factory, hook_context):
+    async def test_post_lease_hook_execution_on_completion(self, mock_device_factory, hook_context) -> None:
         """Test that post-lease hook executes when called directly."""
         hook_config = HookConfigV1Alpha1(
             after_lease=HookInstanceConfigV1Alpha1(script="echo 'Post-lease cleanup completed'", timeout=10),
@@ -306,168 +307,17 @@ class TestHookExecutor:
 
                 result = await executor.execute_after_lease_hook(hook_context)
 
-                assert result is True
+                assert result is None
 
                 # Verify that post-lease hook output was logged
                 expected_calls = [
                     call("Executing after-lease hook for lease %s", "test-lease-123"),
                     call("Executing hook: %s", "echo 'Post-lease cleanup completed'"),
-                    call("Hook executed successfully with exit code %d", 0),
+                    call("Hook executed successfully"),
                 ]
                 mock_logger.info.assert_has_calls(expected_calls, any_order=False)
 
-    async def test_hook_exit_code_matching_success(self, mock_device_factory, hook_context):
-        """Test that hook succeeds when exit code matches expected value."""
-        hook_config = HookConfigV1Alpha1(
-            before_lease=HookInstanceConfigV1Alpha1(script="exit 0", timeout=10, exit_code=0),
-        )
-
-        with patch("jumpstarter.exporter.hooks.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_session_class.return_value.__enter__.return_value = mock_session
-            mock_session.serve_unix_async.return_value.__aenter__ = AsyncMock(return_value="/tmp/test_socket")
-            mock_session.serve_unix_async.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            mock_process = AsyncMock()
-            mock_process.returncode = 0
-            mock_process.stdout.readline.side_effect = [b""]
-            mock_process.wait = AsyncMock(return_value=None)
-
-            with patch("asyncio.create_subprocess_shell", return_value=mock_process):
-                executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
-                result = await executor.execute_before_lease_hook(hook_context)
-                assert result is True
-
-    async def test_hook_exit_code_matching_custom(self, mock_device_factory, hook_context):
-        """Test that hook succeeds when exit code matches custom expected value."""
-        hook_config = HookConfigV1Alpha1(
-            before_lease=HookInstanceConfigV1Alpha1(script="exit 42", timeout=10, exit_code=42),
-        )
-
-        with patch("jumpstarter.exporter.hooks.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_session_class.return_value.__enter__.return_value = mock_session
-            mock_session.serve_unix_async.return_value.__aenter__ = AsyncMock(return_value="/tmp/test_socket")
-            mock_session.serve_unix_async.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            mock_process = AsyncMock()
-            mock_process.returncode = 42
-            mock_process.stdout.readline.side_effect = [b""]
-            mock_process.wait = AsyncMock(return_value=None)
-
-            with patch("asyncio.create_subprocess_shell", return_value=mock_process):
-                executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
-                result = await executor.execute_before_lease_hook(hook_context)
-                assert result is True
-
-    async def test_hook_exit_code_mismatch_pass(self, mock_device_factory, hook_context):
-        """Test that hook succeeds when exit code mismatches but on_failure='pass'."""
-        hook_config = HookConfigV1Alpha1(
-            before_lease=HookInstanceConfigV1Alpha1(script="exit 1", timeout=10, exit_code=0, on_failure="pass"),
-        )
-
-        with patch("jumpstarter.exporter.hooks.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_session_class.return_value.__enter__.return_value = mock_session
-            mock_session.serve_unix_async.return_value.__aenter__ = AsyncMock(return_value="/tmp/test_socket")
-            mock_session.serve_unix_async.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            mock_process = AsyncMock()
-            mock_process.returncode = 1
-            mock_process.stdout.readline.side_effect = [b""]
-            mock_process.wait = AsyncMock(return_value=None)
-
-            with (
-                patch("asyncio.create_subprocess_shell", return_value=mock_process),
-                patch("jumpstarter.exporter.hooks.logger") as mock_logger,
-            ):
-                executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
-                result = await executor.execute_before_lease_hook(hook_context)
-                assert result is True
-                # Verify INFO log was created (using format string)
-                mock_logger.info.assert_any_call(
-                    "%s (on_failure=pass, continuing)", "Hook failed: expected exit code 0, got 1"
-                )
-
-    async def test_hook_exit_code_mismatch_warn(self, mock_device_factory, hook_context):
-        """Test that hook succeeds when exit code mismatches but on_failure='warn'."""
-        hook_config = HookConfigV1Alpha1(
-            before_lease=HookInstanceConfigV1Alpha1(script="exit 1", timeout=10, exit_code=0, on_failure="warn"),
-        )
-
-        with patch("jumpstarter.exporter.hooks.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_session_class.return_value.__enter__.return_value = mock_session
-            mock_session.serve_unix_async.return_value.__aenter__ = AsyncMock(return_value="/tmp/test_socket")
-            mock_session.serve_unix_async.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            mock_process = AsyncMock()
-            mock_process.returncode = 1
-            mock_process.stdout.readline.side_effect = [b""]
-            mock_process.wait = AsyncMock(return_value=None)
-
-            with (
-                patch("asyncio.create_subprocess_shell", return_value=mock_process),
-                patch("jumpstarter.exporter.hooks.logger") as mock_logger,
-            ):
-                executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
-                result = await executor.execute_before_lease_hook(hook_context)
-                assert result is True
-                # Verify WARNING log was created (using format string)
-                mock_logger.warning.assert_any_call(
-                    "%s (on_failure=warn, continuing)", "Hook failed: expected exit code 0, got 1"
-                )
-
-    async def test_hook_exit_code_mismatch_block(self, mock_device_factory, hook_context):
-        """Test that hook raises exception when exit code mismatches and on_failure='block'."""
-        hook_config = HookConfigV1Alpha1(
-            before_lease=HookInstanceConfigV1Alpha1(script="exit 1", timeout=10, exit_code=0, on_failure="block"),
-        )
-
-        with patch("jumpstarter.exporter.hooks.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_session_class.return_value.__enter__.return_value = mock_session
-            mock_session.serve_unix_async.return_value.__aenter__ = AsyncMock(return_value="/tmp/test_socket")
-            mock_session.serve_unix_async.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            mock_process = AsyncMock()
-            mock_process.returncode = 1
-            mock_process.stdout.readline.side_effect = [b""]
-            mock_process.wait = AsyncMock(return_value=None)
-
-            with patch("asyncio.create_subprocess_shell", return_value=mock_process):
-                executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
-                with pytest.raises(HookExecutionError, match="expected exit code 0, got 1"):
-                    await executor.execute_before_lease_hook(hook_context)
-
-    async def test_hook_timeout_with_pass(self, mock_device_factory, hook_context):
-        """Test that hook succeeds when timeout occurs but on_failure='pass'."""
-        hook_config = HookConfigV1Alpha1(
-            before_lease=HookInstanceConfigV1Alpha1(script="sleep 60", timeout=1, on_failure="pass"),
-        )
-
-        with patch("jumpstarter.exporter.hooks.Session") as mock_session_class:
-            mock_session = Mock()
-            mock_session_class.return_value.__enter__.return_value = mock_session
-            mock_session.serve_unix_async.return_value.__aenter__ = AsyncMock(return_value="/tmp/test_socket")
-            mock_session.serve_unix_async.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            mock_process = AsyncMock()
-            mock_process.terminate = AsyncMock(return_value=None)
-            mock_process.wait = AsyncMock(return_value=None)
-
-            with (
-                patch("asyncio.create_subprocess_shell", return_value=mock_process),
-                patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()),
-                patch("jumpstarter.exporter.hooks.logger") as mock_logger,
-            ):
-                executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
-                result = await executor.execute_before_lease_hook(hook_context)
-                assert result is True
-                # Verify INFO log was created
-                assert any("on_failure=pass, continuing" in str(call) for call in mock_logger.info.call_args_list)
-
-    async def test_hook_timeout_with_warn(self, mock_device_factory, hook_context):
+    async def test_hook_timeout_with_warn(self, mock_device_factory, hook_context) -> None:
         """Test that hook succeeds when timeout occurs but on_failure='warn'."""
         hook_config = HookConfigV1Alpha1(
             before_lease=HookInstanceConfigV1Alpha1(script="sleep 60", timeout=1, on_failure="warn"),
@@ -490,6 +340,6 @@ class TestHookExecutor:
             ):
                 executor = HookExecutor(config=hook_config, device_factory=mock_device_factory)
                 result = await executor.execute_before_lease_hook(hook_context)
-                assert result is True
+                assert result is None
                 # Verify WARNING log was created
                 assert any("on_failure=warn, continuing" in str(call) for call in mock_logger.warning.call_args_list)

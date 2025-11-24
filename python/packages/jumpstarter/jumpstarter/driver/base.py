@@ -29,13 +29,13 @@ from .decorators import (
 )
 from jumpstarter.common import LogSource, Metadata
 from jumpstarter.common.resources import ClientStreamResource, PresignedRequestResource, Resource, ResourceMetadata
-from jumpstarter.exporter.logging import get_logger
 from jumpstarter.common.serde import decode_value, encode_value
 from jumpstarter.common.streams import (
     DriverStreamRequest,
     ResourceStreamRequest,
 )
 from jumpstarter.config.env import JMP_DISABLE_COMPRESSION
+from jumpstarter.exporter.logging import get_logger
 from jumpstarter.streams.aiohttp import AiohttpStreamReaderStream
 from jumpstarter.streams.common import create_memory_stream
 from jumpstarter.streams.encoding import Compression, compress_stream
