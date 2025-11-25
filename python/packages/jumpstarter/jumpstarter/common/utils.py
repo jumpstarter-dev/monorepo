@@ -22,8 +22,12 @@ __all__ = ["env"]
 
 @asynccontextmanager
 async def serve_async(root_device: "Driver", portal: BlockingPortal, stack: ExitStack):
+    from jumpstarter.common import ExporterStatus
+
     with Session(root_device=root_device) as session:
         async with session.serve_unix_async() as path:
+            # For local testing, set status to LEASE_READY since there's no lease/hook flow
+            session.update_status(ExporterStatus.LEASE_READY)
             # SAFETY: the root_device instance is constructed locally thus considered trusted
             async with client_from_path(path, portal, stack, allow=[], unsafe=True) as client:
                 try:

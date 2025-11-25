@@ -89,7 +89,7 @@ class AsyncDriverClient(
             status = ExporterStatus.from_proto(response.status)
 
             if status != ExporterStatus.LEASE_READY:
-                raise ExporterNotReady(f"Exporter status is {status}: {response.status_message}")
+                raise ExporterNotReady(f"Exporter status is {status}: {response.message}")
 
         except AioRpcError as e:
             # If GetStatus is not implemented, assume ready for backward compatibility

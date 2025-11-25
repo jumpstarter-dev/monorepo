@@ -183,6 +183,7 @@ class ExporterConfigV1Alpha1(BaseModel):
     @asynccontextmanager
     async def serve_unix_async(self):
         # dynamic import to avoid circular imports
+        from jumpstarter.common import ExporterStatus
         from jumpstarter.exporter import Session
 
         with Session(
@@ -193,6 +194,8 @@ class ExporterConfigV1Alpha1(BaseModel):
             ).instantiate(),
         ) as session:
             async with session.serve_unix_async() as path:
+                # For local usage, set status to LEASE_READY since there's no lease/hook flow
+                session.update_status(ExporterStatus.LEASE_READY)
                 yield path
 
     @contextmanager

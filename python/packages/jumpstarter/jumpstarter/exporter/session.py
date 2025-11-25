@@ -174,5 +174,5 @@ class Session(
         logger.debug("GetStatus() -> %s", self._current_status)
         return jumpstarter_pb2.GetStatusResponse(
             status=self._current_status.to_proto(),
-            status_message=self._status_message,
+            message=self._status_message,
         )
