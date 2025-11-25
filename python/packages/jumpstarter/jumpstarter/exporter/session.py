@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from logging.handlers import QueueHandler
-from typing import Self
+from typing import TYPE_CHECKING, Self
 from uuid import UUID
 
 import grpc
@@ -19,10 +19,12 @@ from jumpstarter_protocol import (
 from .logging import LogHandler
 from jumpstarter.common import ExporterStatus, LogSource, Metadata, TemporarySocket
 from jumpstarter.common.streams import StreamRequestMetadata
-from jumpstarter.driver import Driver
 from jumpstarter.streams.common import forward_stream
 from jumpstarter.streams.metadata import MetadataStreamAttributes
 from jumpstarter.streams.router import RouterStream
+
+if TYPE_CHECKING:
+    from jumpstarter.driver import Driver
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +36,8 @@ class Session(
     Metadata,
     ContextManagerMixin,
 ):
-    root_device: Driver
-    mapping: dict[UUID, Driver]
+    root_device: "Driver"
+    mapping: dict[UUID, "Driver"]
 
     _logging_queue: deque = field(init=False)
     _logging_handler: QueueHandler = field(init=False)

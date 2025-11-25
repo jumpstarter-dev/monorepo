@@ -5,20 +5,23 @@ from contextlib import ExitStack, asynccontextmanager, contextmanager
 from datetime import timedelta
 from functools import partial
 from subprocess import Popen
+from typing import TYPE_CHECKING
 
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 
 from jumpstarter.client import client_from_path
 from jumpstarter.config.env import JMP_DRIVERS_ALLOW, JUMPSTARTER_HOST
-from jumpstarter.driver import Driver
 from jumpstarter.exporter import Session
 from jumpstarter.utils.env import env
+
+if TYPE_CHECKING:
+    from jumpstarter.driver import Driver
 
 __all__ = ["env"]
 
 
 @asynccontextmanager
-async def serve_async(root_device: Driver, portal: BlockingPortal, stack: ExitStack):
+async def serve_async(root_device: "Driver", portal: BlockingPortal, stack: ExitStack):
     with Session(root_device=root_device) as session:
         async with session.serve_unix_async() as path:
             # SAFETY: the root_device instance is constructed locally thus considered trusted
@@ -31,7 +34,7 @@ async def serve_async(root_device: Driver, portal: BlockingPortal, stack: ExitSt
 
 
 @contextmanager
-def serve(root_device: Driver):
+def serve(root_device: "Driver"):
     with start_blocking_portal() as portal:
         with ExitStack() as stack:
             with portal.wrap_async_context_manager(serve_async(root_device, portal, stack)) as client:

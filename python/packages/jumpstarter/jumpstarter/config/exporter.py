@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Optional, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, Self
 
 import grpc
 import yaml
@@ -15,7 +15,9 @@ from .tls import TLSConfigV1Alpha1
 from jumpstarter.common.exceptions import ConfigurationError
 from jumpstarter.common.grpc import aio_secure_channel, ssl_channel_credentials
 from jumpstarter.common.importlib import import_class
-from jumpstarter.driver import Driver
+
+if TYPE_CHECKING:
+    from jumpstarter.driver import Driver
 
 
 class HookInstanceConfigV1Alpha1(BaseModel):
@@ -71,7 +73,7 @@ class ExporterConfigV1Alpha1DriverInstance(RootModel):
         | ExporterConfigV1Alpha1DriverInstanceProxy
     )
 
-    def instantiate(self) -> Driver:
+    def instantiate(self) -> "Driver":
         match self.root:
             case ExporterConfigV1Alpha1DriverInstanceBase():
                 driver_class = import_class(self.root.type, [], True)
