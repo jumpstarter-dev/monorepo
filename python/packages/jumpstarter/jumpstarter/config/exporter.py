@@ -212,7 +212,7 @@ class ExporterConfigV1Alpha1(BaseModel):
 
         from jumpstarter.exporter import Exporter
 
-        async def channel_factory():
+        async def channel_factory() -> grpc.aio.Channel:
             if self.endpoint is None or self.token is None:
                 raise ConfigurationError("endpoint or token not set in exporter config")
             credentials = grpc.composite_channel_credentials(

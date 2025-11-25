@@ -120,7 +120,7 @@ class ClientConfigV1Alpha1(BaseSettings):
 
     leases: ClientConfigV1Alpha1Lease = Field(default_factory=ClientConfigV1Alpha1Lease)
 
-    async def channel(self):
+    async def channel(self) -> grpc.aio.Channel:
         if self.endpoint is None or self.token is None:
             raise ConfigurationError("endpoint or token not set in client config")
 

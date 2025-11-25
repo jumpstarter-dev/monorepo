@@ -5,7 +5,6 @@ from collections import OrderedDict
 from dataclasses import InitVar, dataclass, field
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
 
 from google.protobuf import duration_pb2, field_mask_pb2, json_format, timestamp_pb2
 from grpc import ChannelConnectivity
@@ -489,7 +488,7 @@ class MultipathExporterStub:
 
     channels: InitVar[list[Channel]]
 
-    __stubs: dict[Channel, Any] = field(init=False, default_factory=OrderedDict)
+    __stubs: dict[Channel, SimpleNamespace] = field(init=False, default_factory=OrderedDict)
 
     def __post_init__(self, channels):
         for channel in channels:

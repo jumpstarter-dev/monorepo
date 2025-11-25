@@ -2,6 +2,8 @@
 Base classes for drivers and driver clients
 """
 
+from __future__ import annotations
+
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
