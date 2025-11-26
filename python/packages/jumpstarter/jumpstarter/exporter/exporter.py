@@ -238,12 +238,19 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
         return factory
 
-    async def _register_with_controller(self, channel: grpc.aio.Channel):
-        """Register the exporter with the controller."""
-        exporter_stub = jumpstarter_pb2_grpc.ExporterServiceStub(channel)
+    async def _register_with_controller(self, local_channel: grpc.aio.Channel):
+        """Register the exporter with the controller.
+
+        Args:
+            local_channel: The local Unix socket channel to get device reports from
+        """
+        # Get device reports from the local session
+        exporter_stub = jumpstarter_pb2_grpc.ExporterServiceStub(local_channel)
         response: jumpstarter_pb2.GetReportResponse = await exporter_stub.GetReport(empty_pb2.Empty())
+
+        # Register with the REMOTE controller (not the local session)
         logger.info("Registering exporter with controller")
-        controller = jumpstarter_pb2_grpc.ControllerServiceStub(channel)
+        controller = await self._get_controller_stub()
         await controller.Register(
             jumpstarter_pb2.RegisterRequest(
                 labels=self.labels,
@@ -253,7 +260,6 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         # Mark exporter as registered internally
         self._registered = True
         # Report that exporter is available to the controller
-        # TODO: Determine if the controller should handle this logic internally
         await self._report_status(ExporterStatus.AVAILABLE, "Exporter registered and available")
 
     async def _report_status(self, status: ExporterStatus, message: str = ""):
