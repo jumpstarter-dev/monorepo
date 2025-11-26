@@ -52,6 +52,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -209,6 +210,96 @@ func (s *ControllerService) Unregister(
 	logger.Info("exporter unregistered, updated as unavailable")
 
 	return &pb.UnregisterResponse{}, nil
+}
+
+func (s *ControllerService) ReportStatus(
+	ctx context.Context,
+	req *pb.ReportStatusRequest,
+) (*pb.ReportStatusResponse, error) {
+	logger := log.FromContext(ctx)
+
+	exporter, err := s.authenticateExporter(ctx)
+	if err != nil {
+		logger.Info("unable to authenticate exporter", "error", err.Error())
+		return nil, err
+	}
+
+	logger = logger.WithValues("exporter", types.NamespacedName{
+		Namespace: exporter.Namespace,
+		Name:      exporter.Name,
+	})
+
+	// Convert proto enum to CRD string value
+	exporterStatus := protoStatusToString(req.Status)
+
+	logger.Info("Exporter reporting status", "state", exporterStatus, "message", req.GetMessage())
+
+	original := client.MergeFrom(exporter.DeepCopy())
+
+	exporter.Status.ExporterStatusValue = exporterStatus
+	exporter.Status.StatusMessage = req.GetMessage()
+	// Also update LastSeen to keep the exporter marked as online
+	exporter.Status.LastSeen = metav1.Now()
+
+	// Sync the Online condition with the reported status for consistency
+	// This ensures the deprecated Online boolean field stays consistent with ExporterStatusValue
+	syncOnlineConditionWithStatus(exporter)
+
+	if err := s.Client.Status().Patch(ctx, exporter, original); err != nil {
+		logger.Error(err, "unable to update exporter status")
+		return nil, status.Errorf(codes.Internal, "unable to update exporter status: %s", err)
+	}
+
+	return &pb.ReportStatusResponse{}, nil
+}
+
+// protoStatusToString converts the proto ExporterStatus enum to the CRD string value
+func protoStatusToString(status pb.ExporterStatus) string {
+	switch status {
+	case pb.ExporterStatus_EXPORTER_STATUS_OFFLINE:
+		return jumpstarterdevv1alpha1.ExporterStatusOffline
+	case pb.ExporterStatus_EXPORTER_STATUS_AVAILABLE:
+		return jumpstarterdevv1alpha1.ExporterStatusAvailable
+	case pb.ExporterStatus_EXPORTER_STATUS_BEFORE_LEASE_HOOK:
+		return jumpstarterdevv1alpha1.ExporterStatusBeforeLeaseHook
+	case pb.ExporterStatus_EXPORTER_STATUS_LEASE_READY:
+		return jumpstarterdevv1alpha1.ExporterStatusLeaseReady
+	case pb.ExporterStatus_EXPORTER_STATUS_AFTER_LEASE_HOOK:
+		return jumpstarterdevv1alpha1.ExporterStatusAfterLeaseHook
+	case pb.ExporterStatus_EXPORTER_STATUS_BEFORE_LEASE_HOOK_FAILED:
+		return jumpstarterdevv1alpha1.ExporterStatusBeforeLeaseHookFailed
+	case pb.ExporterStatus_EXPORTER_STATUS_AFTER_LEASE_HOOK_FAILED:
+		return jumpstarterdevv1alpha1.ExporterStatusAfterLeaseHookFailed
+	default:
+		return jumpstarterdevv1alpha1.ExporterStatusUnspecified
+	}
+}
+
+// syncOnlineConditionWithStatus updates the Online condition based on ExporterStatusValue.
+// This ensures the deprecated Online boolean field in the protobuf API stays consistent
+// with the new ExporterStatusValue field.
+func syncOnlineConditionWithStatus(exporter *jumpstarterdevv1alpha1.Exporter) {
+	isOnline := exporter.Status.ExporterStatusValue != jumpstarterdevv1alpha1.ExporterStatusOffline &&
+		exporter.Status.ExporterStatusValue != jumpstarterdevv1alpha1.ExporterStatusUnspecified &&
+		exporter.Status.ExporterStatusValue != ""
+
+	if isOnline {
+		meta.SetStatusCondition(&exporter.Status.Conditions, metav1.Condition{
+			Type:               string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline),
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: exporter.Generation,
+			Reason:             "StatusReported",
+			Message:            fmt.Sprintf("Exporter reported status: %s", exporter.Status.ExporterStatusValue),
+		})
+	} else {
+		meta.SetStatusCondition(&exporter.Status.Conditions, metav1.Condition{
+			Type:               string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline),
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: exporter.Generation,
+			Reason:             "Offline",
+			Message:            exporter.Status.StatusMessage,
+		})
+	}
 }
 
 func (s *ControllerService) Listen(req *pb.ListenRequest, stream pb.ControllerService_ListenServer) error {

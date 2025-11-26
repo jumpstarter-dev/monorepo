@@ -41,6 +41,7 @@ type Exporter struct {
 	// Deprecated: Marked as deprecated in jumpstarter/client/v1/client.proto.
 	Online        bool              `protobuf:"varint,3,opt,name=online,proto3" json:"online,omitempty"`
 	Status        v1.ExporterStatus `protobuf:"varint,4,opt,name=status,proto3,enum=jumpstarter.v1.ExporterStatus" json:"status,omitempty"`
+	StatusMessage string            `protobuf:"bytes,5,opt,name=status_message,json=statusMessage,proto3" json:"status_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -102,6 +103,13 @@ func (x *Exporter) GetStatus() v1.ExporterStatus {
 		return x.Status
 	}
 	return v1.ExporterStatus(0)
+}
+
+func (x *Exporter) GetStatusMessage() string {
+	if x != nil {
+		return x.StatusMessage
+	}
+	return ""
 }
 
 type Lease struct {
@@ -724,12 +732,13 @@ var File_jumpstarter_client_v1_client_proto protoreflect.FileDescriptor
 
 const file_jumpstarter_client_v1_client_proto_rawDesc = "" +
 	"\n" +
-	"\"jumpstarter/client/v1/client.proto\x12\x15jumpstarter.client.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x17google/api/client.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1fjumpstarter/v1/kubernetes.proto\x1a\x1bjumpstarter/v1/common.proto\"\xe0\x02\n" +
+	"\"jumpstarter/client/v1/client.proto\x12\x15jumpstarter.client.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x17google/api/client.proto\x1a\x1fgoogle/api/field_behavior.proto\x1a\x19google/api/resource.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1fjumpstarter/v1/kubernetes.proto\x1a\x1bjumpstarter/v1/common.proto\"\x8c\x03\n" +
 	"\bExporter\x12\x17\n" +
 	"\x04name\x18\x01 \x01(\tB\x03\xe0A\bR\x04name\x12C\n" +
 	"\x06labels\x18\x02 \x03(\v2+.jumpstarter.client.v1.Exporter.LabelsEntryR\x06labels\x12\x1d\n" +
 	"\x06online\x18\x03 \x01(\bB\x05\xe0A\x03\x18\x01R\x06online\x12;\n" +
-	"\x06status\x18\x04 \x01(\x0e2\x1e.jumpstarter.v1.ExporterStatusB\x03\xe0A\x03R\x06status\x1a9\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x1e.jumpstarter.v1.ExporterStatusB\x03\xe0A\x03R\x06status\x12*\n" +
+	"\x0estatus_message\x18\x05 \x01(\tB\x03\xe0A\x03R\rstatusMessage\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:_\xeaA\\\n" +

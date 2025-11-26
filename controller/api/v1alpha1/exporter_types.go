@@ -38,6 +38,11 @@ type ExporterStatus struct {
 	LeaseRef   *corev1.LocalObjectReference `json:"leaseRef,omitempty"`
 	LastSeen   metav1.Time                  `json:"lastSeen,omitempty"`
 	Endpoint   string                       `json:"endpoint,omitempty"`
+	// ExporterStatusValue is the current operational status reported by the exporter
+	// +kubebuilder:validation:Enum=Unspecified;Offline;Available;BeforeLeaseHook;LeaseReady;AfterLeaseHook;BeforeLeaseHookFailed;AfterLeaseHookFailed
+	ExporterStatusValue string `json:"exporterStatus,omitempty"`
+	// StatusMessage is an optional human-readable message describing the current state
+	StatusMessage string `json:"statusMessage,omitempty"`
 }
 
 type ExporterConditionType string
@@ -47,8 +52,22 @@ const (
 	ExporterConditionTypeOnline     ExporterConditionType = "Online"
 )
 
+// ExporterStatus values - PascalCase for Kubernetes, converted from proto ALL_CAPS
+const (
+	ExporterStatusUnspecified           = "Unspecified"
+	ExporterStatusOffline               = "Offline"
+	ExporterStatusAvailable             = "Available"
+	ExporterStatusBeforeLeaseHook       = "BeforeLeaseHook"
+	ExporterStatusLeaseReady            = "LeaseReady"
+	ExporterStatusAfterLeaseHook        = "AfterLeaseHook"
+	ExporterStatusBeforeLeaseHookFailed = "BeforeLeaseHookFailed"
+	ExporterStatusAfterLeaseHookFailed  = "AfterLeaseHookFailed"
+)
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.exporterStatus"
+// +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.statusMessage",priority=1
 
 // Exporter is the Schema for the exporters API
 type Exporter struct {

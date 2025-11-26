@@ -167,6 +167,9 @@ func (r *ExporterReconciler) reconcileStatusConditionsOnline(
 			Reason:             "Seen",
 			Message:            "Never seen",
 		})
+		// Reset status to OFFLINE when never seen
+		exporter.Status.ExporterStatusValue = jumpstarterdevv1alpha1.ExporterStatusOffline
+		exporter.Status.StatusMessage = "Never seen"
 		// marking the exporter offline, no need to requeue
 	} else if time.Since(exporter.Status.LastSeen.Time) > time.Minute {
 		meta.SetStatusCondition(&exporter.Status.Conditions, metav1.Condition{
@@ -176,17 +179,35 @@ func (r *ExporterReconciler) reconcileStatusConditionsOnline(
 			Reason:             "Seen",
 			Message:            "Last seen more than 1 minute ago",
 		})
+		// Reset status to OFFLINE when exporter hasn't been seen recently
+		if exporter.Status.ExporterStatusValue != jumpstarterdevv1alpha1.ExporterStatusOffline {
+			exporter.Status.ExporterStatusValue = jumpstarterdevv1alpha1.ExporterStatusOffline
+			exporter.Status.StatusMessage = "Connection lost - last seen more than 1 minute ago"
+		}
 		// marking the exporter offline, no need to requeue
 	} else {
-		meta.SetStatusCondition(&exporter.Status.Conditions, metav1.Condition{
-			Type:               string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline),
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: exporter.Generation,
-			Reason:             "Seen",
-			Message:            "Last seen less than 1 minute ago",
-		})
-		// marking the exporter online, requeue after 30 seconds
-		requeueAfter = time.Second * 30
+		// Check if exporter explicitly reported Offline status even though LastSeen is recent
+		// This happens when an exporter gracefully shuts down
+		if exporter.Status.ExporterStatusValue == jumpstarterdevv1alpha1.ExporterStatusOffline {
+			meta.SetStatusCondition(&exporter.Status.Conditions, metav1.Condition{
+				Type:               string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline),
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: exporter.Generation,
+				Reason:             "Offline",
+				Message:            exporter.Status.StatusMessage,
+			})
+			// exporter reported offline, no need to requeue
+		} else {
+			meta.SetStatusCondition(&exporter.Status.Conditions, metav1.Condition{
+				Type:               string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline),
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: exporter.Generation,
+				Reason:             "Seen",
+				Message:            "Last seen less than 1 minute ago",
+			})
+			// marking the exporter online, requeue after 30 seconds
+			requeueAfter = time.Second * 30
+		}
 	}
 
 	if exporter.Status.Devices == nil {

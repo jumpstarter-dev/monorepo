@@ -64,6 +64,7 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 						output:rbac:artifacts:config=deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/rbac/
 
 	cp deploy/helm/jumpstarter/crds/* deploy/operator/config/crd/bases/
+	cp deploy/helm/jumpstarter/crds/* deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/crds/
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

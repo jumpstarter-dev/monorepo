@@ -47,8 +47,10 @@ fi
 echo -e "${GREEN}Performing helm ${METHOD} ...${NC}"
 
 # install/update with helm
+# --skip-crds: CRDs are managed via templates/crds/ instead of the special crds/ directory
 helm ${METHOD} --namespace jumpstarter-lab \
                --create-namespace \
+               --skip-crds \
                ${HELM_SETS} \
                --set global.timestamp=$(date +%s) \
                --values ./deploy/helm/jumpstarter/values.kind.yaml ${EXTRA_VALUES} jumpstarter \
