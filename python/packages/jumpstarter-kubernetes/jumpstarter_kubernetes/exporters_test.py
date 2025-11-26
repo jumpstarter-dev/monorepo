@@ -47,7 +47,9 @@ def test_exporter_dump_json():
                 "uuid": "f4cf49ab-fc64-46c6-94e7-a40502eb77b1"
             }
         ],
-        "endpoint": "https://test-exporter"
+        "endpoint": "https://test-exporter",
+        "exporterStatus": null,
+        "statusMessage": null
     }
 }"""
     )
@@ -73,6 +75,8 @@ status:
       test: label
     uuid: f4cf49ab-fc64-46c6-94e7-a40502eb77b1
   endpoint: https://test-exporter
+  exporterStatus: null
+  statusMessage: null
 """
     )
 
@@ -113,8 +117,9 @@ def test_exporter_rich_add_columns_without_devices():
 
     mock_table = MagicMock()
     V1Alpha1Exporter.rich_add_columns(mock_table, devices=False)
-    assert mock_table.add_column.call_count == 4
+    assert mock_table.add_column.call_count == 5
     mock_table.add_column.assert_any_call("NAME", no_wrap=True)
+    mock_table.add_column.assert_any_call("STATUS")
     mock_table.add_column.assert_any_call("ENDPOINT")
     mock_table.add_column.assert_any_call("DEVICES")
     mock_table.add_column.assert_any_call("AGE")
@@ -128,8 +133,9 @@ def test_exporter_rich_add_columns_with_devices():
 
     mock_table = MagicMock()
     V1Alpha1Exporter.rich_add_columns(mock_table, devices=True)
-    assert mock_table.add_column.call_count == 5
+    assert mock_table.add_column.call_count == 6
     mock_table.add_column.assert_any_call("NAME", no_wrap=True)
+    mock_table.add_column.assert_any_call("STATUS")
     mock_table.add_column.assert_any_call("ENDPOINT")
     mock_table.add_column.assert_any_call("AGE")
     mock_table.add_column.assert_any_call("LABELS")
@@ -146,9 +152,10 @@ def test_exporter_rich_add_rows_without_devices():
     mock_table.add_row.assert_called_once()
     args = mock_table.add_row.call_args[0]
     assert args[0] == "test-exporter"
-    assert args[1] == "https://test-exporter"
-    assert args[2] == "1"  # Number of devices
-    assert args[3] == "5m"  # Age
+    assert args[1] == "Unknown"  # Status (shows "Unknown" when exporter_status is None)
+    assert args[2] == "https://test-exporter"
+    assert args[3] == "1"  # Number of devices
+    assert args[4] == "5m"  # Age
 
 
 def test_exporter_rich_add_rows_with_devices():
@@ -161,10 +168,11 @@ def test_exporter_rich_add_rows_with_devices():
     mock_table.add_row.assert_called_once()
     args = mock_table.add_row.call_args[0]
     assert args[0] == "test-exporter"
-    assert args[1] == "https://test-exporter"
-    assert args[2] == "5m"  # Age
-    assert args[3] == "test:label"  # Labels
-    assert args[4] == "f4cf49ab-fc64-46c6-94e7-a40502eb77b1"  # UUID
+    assert args[1] == "Unknown"  # Status (shows "Unknown" when exporter_status is None)
+    assert args[2] == "https://test-exporter"
+    assert args[3] == "5m"  # Age
+    assert args[4] == "test:label"  # Labels
+    assert args[5] == "f4cf49ab-fc64-46c6-94e7-a40502eb77b1"  # UUID
 
 
 def test_exporter_rich_add_names():
@@ -212,7 +220,7 @@ def test_exporter_list_rich_add_columns():
 
     mock_table = MagicMock()
     V1Alpha1ExporterList.rich_add_columns(mock_table, devices=False)
-    assert mock_table.add_column.call_count == 4
+    assert mock_table.add_column.call_count == 5
 
 
 def test_exporter_list_rich_add_columns_with_devices():
@@ -223,7 +231,7 @@ def test_exporter_list_rich_add_columns_with_devices():
 
     mock_table = MagicMock()
     V1Alpha1ExporterList.rich_add_columns(mock_table, devices=True)
-    assert mock_table.add_column.call_count == 5
+    assert mock_table.add_column.call_count == 6
 
 
 def test_exporter_list_rich_add_rows():
