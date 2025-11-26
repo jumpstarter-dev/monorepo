@@ -132,7 +132,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     AFTER_LEASE_HOOK, BEFORE_LEASE_HOOK_FAILED, AFTER_LEASE_HOOK_FAILED.
     """
 
-    _lease_scope: LeaseContext | None = field(init=False, default=None)
+    _lease_context: LeaseContext | None = field(init=False, default=None)
     """Encapsulates all resources associated with the current lease.
 
     Contains the session, socket path, and synchronization event needed
@@ -266,9 +266,10 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         """Report the exporter status with the controller and session."""
         self._exporter_status = status
 
-        # Update session status if available
-        if self._lease_scope and self._lease_scope.session:
-            self._lease_scope.session.update_status(status, message)
+        # Update status in lease context (handles session update internally)
+        # This ensures status is stored even before session is created
+        if self._lease_context:
+            self._lease_context.update_status(status, message)
 
         try:
             controller = await self._get_controller_stub()
@@ -409,6 +410,10 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             # Populate the lease scope with session and socket path
             lease_scope.session = session
             lease_scope.socket_path = path
+            # Sync current status to the newly created session
+            # This ensures the session has the correct status even if _report_status
+            # was called before the session was created (race condition fix)
+            session.update_status(lease_scope.current_status, lease_scope.status_message)
 
             # Wait for before-lease hook to complete before processing client connections
             logger.info("Waiting for before-lease hook to complete before accepting connections")
@@ -449,23 +454,23 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             async for status in status_rx:
                 # Check if lease name changed (and there was a previous active lease)
                 lease_changed = (
-                    self._lease_scope
-                    and self._lease_scope.is_active()
-                    and self._lease_scope.lease_name != status.lease_name
+                    self._lease_context
+                    and self._lease_context.is_active()
+                    and self._lease_context.lease_name != status.lease_name
                 )
                 if lease_changed:
                     # After-lease hook for the previous lease (lease name changed)
-                    if self.hook_executor and self._lease_scope.has_client():
+                    if self.hook_executor and self._lease_context.has_client():
                         with CancelScope(shield=True):
                             await self.hook_executor.run_after_lease_hook(
-                                self._lease_scope,
+                                self._lease_context,
                                 self._report_status,
                                 self.stop,
                             )
 
                     logger.info("Lease status changed, killing existing connections")
                     # Clear lease scope for next lease
-                    self._lease_scope = None
+                    self._lease_context = None
                     self.stop()
                     break
 
@@ -482,43 +487,48 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                         lease_name=status.lease_name,
                         before_lease_hook=Event(),
                     )
-                    self._lease_scope = lease_scope
+                    self._lease_context = lease_scope
                     tg.start_soon(self.handle_lease, status.lease_name, tg, lease_scope)
 
                 if current_leased:
                     logger.info("Currently leased by %s under %s", status.client_name, status.lease_name)
-                    if self._lease_scope:
-                        self._lease_scope.update_client(status.client_name)
+                    if self._lease_context:
+                        self._lease_context.update_client(status.client_name)
 
                     # Before-lease hook when transitioning from unleased to leased
                     if not previous_leased:
-                        if self.hook_executor and self._lease_scope:
+                        if self.hook_executor and self._lease_context:
                             tg.start_soon(
                                 self.hook_executor.run_before_lease_hook,
-                                self._lease_scope,
+                                self._lease_context,
                                 self._report_status,
                                 self.stop,  # Pass shutdown callback
                             )
                         else:
                             # No hook configured, set event immediately
                             await self._report_status(ExporterStatus.LEASE_READY, "Ready for commands")
-                            if self._lease_scope:
-                                self._lease_scope.before_lease_hook.set()
+                            if self._lease_context:
+                                self._lease_context.before_lease_hook.set()
                 else:
                     logger.info("Currently not leased")
 
                     # After-lease hook when transitioning from leased to unleased
-                    if previous_leased and self.hook_executor and self._lease_scope and self._lease_scope.has_client():
+                    if (
+                        previous_leased
+                        and self.hook_executor
+                        and self._lease_context
+                        and self._lease_context.has_client()
+                    ):
                         # Shield the after-lease hook from cancellation
                         with CancelScope(shield=True):
                             await self.hook_executor.run_after_lease_hook(
-                                self._lease_scope,
+                                self._lease_context,
                                 self._report_status,
                                 self.stop,
                             )
 
                     # Clear lease scope for next lease
-                    self._lease_scope = None
+                    self._lease_context = None
 
                     if self._stop_requested:
                         self.stop(should_unregister=True)
