@@ -259,8 +259,11 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         )
         # Mark exporter as registered internally
         self._registered = True
-        # Report that exporter is available to the controller
-        await self._report_status(ExporterStatus.AVAILABLE, "Exporter registered and available")
+        # Only report AVAILABLE status during initial registration (no lease context)
+        # During per-lease registration, status is managed by serve() to avoid
+        # overwriting LEASE_READY with AVAILABLE
+        if self._lease_context is None:
+            await self._report_status(ExporterStatus.AVAILABLE, "Exporter registered and available")
 
     async def _report_status(self, status: ExporterStatus, message: str = ""):
         """Report the exporter status with the controller and session."""
@@ -410,15 +413,15 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             # Populate the lease scope with session and socket path
             lease_scope.session = session
             lease_scope.socket_path = path
-            # Sync current status to the newly created session
-            # This ensures the session has the correct status even if _report_status
-            # was called before the session was created (race condition fix)
-            session.update_status(lease_scope.current_status, lease_scope.status_message)
 
             # Wait for before-lease hook to complete before processing client connections
             logger.info("Waiting for before-lease hook to complete before accepting connections")
             await lease_scope.before_lease_hook.wait()
             logger.info("Before-lease hook completed, now accepting connections")
+
+            # Sync status to session AFTER hook completes - this ensures we have LEASE_READY
+            # status from serve() rather than the default AVAILABLE
+            session.update_status(lease_scope.current_status, lease_scope.status_message)
 
             # Process client connections
             # Type: request is jumpstarter_pb2.ListenResponse with router_endpoint and router_token fields
