@@ -484,9 +484,13 @@ func setExporterOnlineConditions(ctx context.Context, name string, status metav1
 	if status == metav1.ConditionTrue {
 		exporter.Status.Devices = []jumpstarterdevv1alpha1.Device{{}}
 		exporter.Status.LastSeen = metav1.Now()
+		exporter.Status.ExporterStatusValue = jumpstarterdevv1alpha1.ExporterStatusAvailable
+		exporter.Status.StatusMessage = "Available for leasing"
 	} else {
 		exporter.Status.Devices = nil
 		exporter.Status.LastSeen = metav1.NewTime(metav1.Now().Add(-time.Minute * 2))
+		exporter.Status.ExporterStatusValue = jumpstarterdevv1alpha1.ExporterStatusOffline
+		exporter.Status.StatusMessage = "Offline"
 	}
 	Expect(k8sClient.Status().Update(ctx, exporter)).To(Succeed())
 }
