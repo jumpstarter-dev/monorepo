@@ -132,6 +132,13 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     AFTER_LEASE_HOOK, BEFORE_LEASE_HOOK_FAILED, AFTER_LEASE_HOOK_FAILED.
     """
 
+    _previous_leased: bool = field(init=False, default=False)
+    """Previous lease state used to detect lease state transitions.
+
+    Tracks whether the exporter was leased in the previous status check to
+    determine when to trigger before-lease and after-lease hooks.
+    """
+
     _lease_context: LeaseContext | None = field(init=False, default=None)
     """Encapsulates all resources associated with the current lease.
 
@@ -478,7 +485,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                     break
 
                 # Check for lease state transitions
-                previous_leased = hasattr(self, "_previous_leased") and self._previous_leased
+                previous_leased = self._previous_leased
                 current_leased = status.leased
 
                 # Check if this is a new lease assignment (first time or lease name changed)
