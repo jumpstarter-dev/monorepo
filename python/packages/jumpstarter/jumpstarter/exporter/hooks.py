@@ -1,16 +1,18 @@
 """Lifecycle hooks for Jumpstarter exporters."""
 
-import asyncio
 import logging
 import os
+import subprocess
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Literal
 
+import anyio
+from anyio import open_process
+
 from jumpstarter.common import ExporterStatus, LogSource
 from jumpstarter.config.env import JMP_DRIVERS_ALLOW, JUMPSTARTER_HOST
 from jumpstarter.config.exporter import HookConfigV1Alpha1, HookInstanceConfigV1Alpha1
-from jumpstarter.exporter.logging import get_logger
 from jumpstarter.exporter.session import Session
 
 if TYPE_CHECKING:
@@ -148,7 +150,12 @@ class HookExecutor:
         logging_session: Session,
         hook_type: Literal["before_lease", "after_lease"],
     ) -> None:
-        """Execute the hook process with the given environment and logging session."""
+        """Execute the hook process with the given environment and logging session.
+
+        Uses anyio for subprocess execution to be compatible with the anyio-based exporter.
+        """
+
+
         command = hook_config.script
         timeout = hook_config.timeout
         on_failure = hook_config.on_failure
@@ -156,56 +163,60 @@ class HookExecutor:
         # Exception handling
         error_msg: str | None = None
         cause: Exception | None = None
+        timed_out = False
 
         try:
-            # Execute the hook command using shell
-            process = await asyncio.create_subprocess_shell(
+            # Execute the hook command using shell via anyio
+            # Pass the command as a string to use shell mode
+            async with await open_process(
                 command,
                 env=hook_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            ) as process:
+                output_lines: list[str] = []
 
-            try:
-                # Create a logger with automatic source registration
-                hook_logger = get_logger(f"hook.{lease_scope.lease_name}", log_source, logging_session)
+                async def read_output() -> None:
+                    """Read stdout line by line."""
+                    assert process.stdout is not None
+                    buffer = b""
+                    async for chunk in process.stdout:
+                        buffer += chunk
+                        while b"\n" in buffer:
+                            line, buffer = buffer.split(b"\n", 1)
+                            line_decoded = line.decode().rstrip()
+                            output_lines.append(line_decoded)
+                            logger.info("[hook output] %s", line_decoded)
+                    # Handle any remaining data without newline
+                    if buffer:
+                        line_decoded = buffer.decode().rstrip()
+                        if line_decoded:
+                            output_lines.append(line_decoded)
+                            logger.info("[hook output] %s", line_decoded)
 
-                # Stream output line-by-line for real-time logging
-                output_lines = []
+                # Use move_on_after for timeout
+                with anyio.move_on_after(timeout) as cancel_scope:
+                    await read_output()
+                    await process.wait()
 
-                async def read_output():
-                    while True:
-                        line = await process.stdout.readline()
-                        if not line:
-                            break
-                        line_decoded = line.decode().rstrip()
-                        output_lines.append(line_decoded)
-                        # Route hook output through the logging system
-                        hook_logger.info(line_decoded)
+                if cancel_scope.cancelled_caught:
+                    timed_out = True
+                    error_msg = f"Hook timed out after {timeout} seconds"
+                    logger.error(error_msg)
+                    # Terminate the process
+                    process.terminate()
+                    # Give it a moment to terminate gracefully
+                    with anyio.move_on_after(5):
+                        await process.wait()
+                    # Force kill if still running
+                    if process.returncode is None:
+                        process.kill()
 
-                # Run output reading and process waiting concurrently with timeout
-                await asyncio.wait_for(asyncio.gather(read_output(), process.wait()), timeout=timeout)
-
-                # Check if hook succeeded (exit code 0)
-                if process.returncode == 0:
+                elif process.returncode == 0:
                     logger.info("Hook executed successfully")
                     return
-
-                # Non-zero exit code is a failure
-                error_msg = f"Hook failed with exit code {process.returncode}"
-
-            except asyncio.TimeoutError as e:
-                error_msg = f"Hook timed out after {timeout} seconds"
-                cause = e
-                logger.error(error_msg)
-                try:
-                    # Attempt to gracefully terminate the process
-                    process.terminate()
-                    await asyncio.wait_for(process.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    # Force kill if it didn't terminate in time
-                    process.kill()
-                    await process.wait()
+                else:
+                    error_msg = f"Hook failed with exit code {process.returncode}"
 
         except Exception as e:
             error_msg = f"Error executing hook: {e}"
@@ -214,6 +225,9 @@ class HookExecutor:
 
         # Handle failure if one occurred
         if error_msg is not None:
+            # For timeout, create a TimeoutError as the cause
+            if timed_out and cause is None:
+                cause = TimeoutError(error_msg)
             self._handle_hook_failure(error_msg, on_failure, hook_type, cause)
 
     async def execute_before_lease_hook(self, lease_scope: "LeaseContext") -> None:
@@ -278,7 +292,19 @@ class HookExecutor:
         """
         try:
             # Wait for lease scope to be fully populated by handle_lease
-            assert lease_scope.is_ready(), "LeaseScope must be fully initialized before running before-lease hooks"
+            # This is necessary because handle_lease and run_before_lease_hook run concurrently
+            timeout = 30  # seconds
+            interval = 0.1  # seconds
+            elapsed = 0.0
+            while not lease_scope.is_ready():
+                if elapsed >= timeout:
+                    error_msg = "Timeout waiting for lease scope to be ready"
+                    logger.error(error_msg)
+                    await report_status(ExporterStatus.BEFORE_LEASE_HOOK_FAILED, error_msg)
+                    lease_scope.before_lease_hook.set()
+                    return
+                await anyio.sleep(interval)
+                elapsed += interval
 
             # Check if hook is configured
             if not self.config.before_lease:
@@ -351,8 +377,12 @@ class HookExecutor:
             shutdown: Callback to trigger exporter shutdown on critical failures
         """
         try:
-            # Verify lease scope is ready
-            assert lease_scope.is_ready(), "LeaseScope must be fully initialized before running after-lease hooks"
+            # Verify lease scope is ready - for after-lease this should always be true
+            # since we've already processed the lease, but check defensively
+            if not lease_scope.is_ready():
+                logger.warning("LeaseScope not ready for after-lease hook, skipping")
+                await report_status(ExporterStatus.AVAILABLE, "Available for new lease")
+                return
 
             # Check if hook is configured
             if not self.config.after_lease:
