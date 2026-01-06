@@ -274,7 +274,7 @@ class HookExecutor:
         self,
         lease_scope: "LeaseContext",
         report_status: Callable[["ExporterStatus", str], Awaitable[None]],
-        shutdown: Callable[[], None],
+        shutdown: Callable[..., None],
     ) -> None:
         """Execute before-lease hook with full orchestration.
 
@@ -288,7 +288,7 @@ class HookExecutor:
         Args:
             lease_scope: LeaseScope containing session, socket_path, and sync event
             report_status: Async callback to report status changes to controller
-            shutdown: Callback to trigger exporter shutdown on critical failures
+            shutdown: Callback to trigger exporter shutdown (accepts optional exit_code kwarg)
         """
         try:
             # Wait for lease scope to be fully populated by handle_lease
@@ -334,7 +334,8 @@ class HookExecutor:
                     f"beforeLease hook failed (on_failure=exit, shutting down): {e}",
                 )
                 logger.error("Shutting down exporter due to beforeLease hook failure with on_failure='exit'")
-                shutdown()
+                # Exit code 1 tells the CLI not to restart the exporter
+                shutdown(exit_code=1)
             else:
                 # on_failure='endLease' - just block this lease, exporter stays available
                 logger.error("beforeLease hook failed with on_failure='endLease': %s", e)
@@ -360,7 +361,7 @@ class HookExecutor:
         self,
         lease_scope: "LeaseContext",
         report_status: Callable[["ExporterStatus", str], Awaitable[None]],
-        shutdown: Callable[[], None],
+        shutdown: Callable[..., None],
     ) -> None:
         """Execute after-lease hook with full orchestration.
 
@@ -374,7 +375,7 @@ class HookExecutor:
         Args:
             lease_scope: LeaseScope containing session, socket_path, and client info
             report_status: Async callback to report status changes to controller
-            shutdown: Callback to trigger exporter shutdown on critical failures
+            shutdown: Callback to trigger exporter shutdown (accepts optional exit_code kwarg)
         """
         try:
             # Verify lease scope is ready - for after-lease this should always be true
@@ -412,7 +413,8 @@ class HookExecutor:
                     f"afterLease hook failed (on_failure=exit, shutting down): {e}",
                 )
                 logger.error("Shutting down exporter due to afterLease hook failure with on_failure='exit'")
-                shutdown()
+                # Exit code 1 tells the CLI not to restart the exporter
+                shutdown(exit_code=1)
             else:
                 # on_failure='endLease' - lease already ended, just report the failure
                 # The exporter remains available for new leases

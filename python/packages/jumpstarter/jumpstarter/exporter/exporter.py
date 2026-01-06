@@ -139,6 +139,14 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     determine when to trigger before-lease and after-lease hooks.
     """
 
+    _exit_code: int | None = field(init=False, default=None)
+    """Exit code to use when the exporter shuts down.
+
+    When set to a non-zero value, the exporter should terminate permanently
+    (not restart). This is used by hooks with on_failure='exit' to signal
+    that the exporter should shut down and not be restarted by the CLI.
+    """
+
     _lease_context: LeaseContext | None = field(init=False, default=None)
     """Encapsulates all resources associated with the current lease.
 
@@ -157,13 +165,17 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     a reference holder and doesn't manage resource lifecycles directly.
     """
 
-    def stop(self, wait_for_lease_exit=False, should_unregister=False):
+    def stop(self, wait_for_lease_exit=False, should_unregister=False, exit_code: int | None = None):
         """Signal the exporter to stop.
 
         Args:
             wait_for_lease_exit (bool): If True, wait for the current lease to exit before stopping.
             should_unregister (bool): If True, unregister from controller. Otherwise rely on heartbeat.
+            exit_code (int | None): If set, the exporter will exit with this code (non-zero means no restart).
         """
+        # Set exit code if provided
+        if exit_code is not None:
+            self._exit_code = exit_code
 
         # Stop immediately if not started yet or if immediate stop is requested
         if (not self._started or not wait_for_lease_exit) and self._tg is not None:
@@ -177,6 +189,15 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         elif not self._stop_requested:
             self._stop_requested = True
             logger.info("Exporter marked for stop upon lease exit")
+
+    @property
+    def exit_code(self) -> int | None:
+        """Get the exit code for the exporter.
+
+        Returns:
+            The exit code if set, or None if the exporter should restart.
+        """
+        return self._exit_code
 
     async def _get_controller_stub(self) -> jumpstarter_pb2_grpc.ControllerServiceStub:
         """Create and return a controller service stub."""

@@ -76,11 +76,22 @@ def _handle_child(config):
                 except* Exception as excgroup:
                     _handle_exporter_exceptions(excgroup)
 
+                # Check if exporter set an exit code (e.g., from hook failure with on_failure='exit')
+                exporter_exit_code = exporter.exit_code
+
             # Cancel the signal handler after exporter completes
             signal_tg.cancel_scope.cancel()
 
-        # Return signal number if received, otherwise 0 for immediate restart
-        return received_signal if received_signal else 0
+        # Return exit code in priority order:
+        # 1. Signal number if received (for signal-based termination)
+        # 2. Exporter's exit code if set (for hook failure with on_failure='exit')
+        # 3. 0 for immediate restart (normal exit without signal or explicit exit code)
+        if received_signal:
+            return received_signal
+        elif exporter_exit_code is not None:
+            return exporter_exit_code
+        else:
+            return 0
 
     sys.exit(anyio.run(serve_with_graceful_shutdown))
 
