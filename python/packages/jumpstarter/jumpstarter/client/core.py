@@ -85,12 +85,24 @@ class AsyncDriverClient(
             self.logger.addHandler(handler)
 
     async def check_exporter_status(self):
-        """Check if the exporter is ready to accept driver calls"""
+        """Check if the exporter is ready to accept driver calls.
+
+        Allows driver commands during hook execution (BEFORE_LEASE_HOOK, AFTER_LEASE_HOOK)
+        in addition to the normal LEASE_READY status. This enables hooks to interact
+        with drivers via the `j` CLI for automation use cases.
+        """
+        # Statuses that allow driver commands
+        ALLOWED_STATUSES = {
+            ExporterStatus.LEASE_READY,
+            ExporterStatus.BEFORE_LEASE_HOOK,
+            ExporterStatus.AFTER_LEASE_HOOK,
+        }
+
         try:
             response = await self.stub.GetStatus(jumpstarter_pb2.GetStatusRequest())
             status = ExporterStatus.from_proto(response.status)
 
-            if status != ExporterStatus.LEASE_READY:
+            if status not in ALLOWED_STATUSES:
                 raise ExporterNotReady(f"Exporter status is {status}: {response.message}")
 
         except AioRpcError as e:
