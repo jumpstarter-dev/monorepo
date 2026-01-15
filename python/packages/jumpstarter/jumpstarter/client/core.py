@@ -84,6 +84,22 @@ class AsyncDriverClient(
             handler = RichHandler()
             self.logger.addHandler(handler)
 
+    async def get_status_async(self) -> ExporterStatus | None:
+        """Get the current exporter status.
+
+        Returns:
+            The current ExporterStatus, or None if GetStatus is not implemented.
+        """
+        try:
+            response = await self.stub.GetStatus(jumpstarter_pb2.GetStatusRequest())
+            return ExporterStatus.from_proto(response.status)
+        except AioRpcError as e:
+            # If GetStatus is not implemented, return None for backward compatibility
+            if e.code() == StatusCode.UNIMPLEMENTED:
+                self.logger.debug("GetStatus not implemented")
+                return None
+            raise DriverError(f"Failed to get exporter status: {e.details()}") from e
+
     async def check_exporter_status(self):
         """Check if the exporter is ready to accept driver calls.
 
@@ -98,19 +114,33 @@ class AsyncDriverClient(
             ExporterStatus.AFTER_LEASE_HOOK,
         }
 
+        status = await self.get_status_async()
+        if status is None:
+            # GetStatus not implemented, assume ready for backward compatibility
+            return
+
+        if status not in ALLOWED_STATUSES:
+            raise ExporterNotReady(f"Exporter status is {status}")
+
+    async def end_session_async(self) -> bool:
+        """End the current session and wait for afterLease hook to complete.
+
+        This signals the exporter to run the afterLease hook while keeping
+        the connection open, allowing the client to receive hook logs.
+
+        Returns:
+            True if the session ended successfully, False if EndSession is not implemented.
+        """
         try:
-            response = await self.stub.GetStatus(jumpstarter_pb2.GetStatusRequest())
-            status = ExporterStatus.from_proto(response.status)
-
-            if status not in ALLOWED_STATUSES:
-                raise ExporterNotReady(f"Exporter status is {status}: {response.message}")
-
+            response = await self.stub.EndSession(jumpstarter_pb2.EndSessionRequest())
+            self.logger.debug("EndSession completed: success=%s, message=%s", response.success, response.message)
+            return response.success
         except AioRpcError as e:
-            # If GetStatus is not implemented, assume ready for backward compatibility
+            # If EndSession is not implemented, return False for backward compatibility
             if e.code() == StatusCode.UNIMPLEMENTED:
-                self.logger.debug("GetStatus not implemented, assuming exporter is ready")
-                return
-            raise DriverError(f"Failed to check exporter status: {e.details()}") from e
+                self.logger.debug("EndSession not implemented")
+                return False
+            raise DriverError(f"Failed to end session: {e.details()}") from e
 
     async def call_async(self, method, *args):
         """Make DriverCall by method name and arguments"""

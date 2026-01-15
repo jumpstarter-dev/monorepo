@@ -600,7 +600,23 @@ _ExporterServiceGetStatusType = typing_extensions.TypeVar(
     ],
 )
 
-class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _ExporterServiceDriverCallType, _ExporterServiceStreamingDriverCallType, _ExporterServiceLogStreamType, _ExporterServiceResetType, _ExporterServiceGetStatusType]):
+_ExporterServiceEndSessionType = typing_extensions.TypeVar(
+    '_ExporterServiceEndSessionType',
+    grpc.UnaryUnaryMultiCallable[
+        jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
+        jumpstarter.v1.jumpstarter_pb2.EndSessionResponse,
+    ],
+    grpc.aio.UnaryUnaryMultiCallable[
+        jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
+        jumpstarter.v1.jumpstarter_pb2.EndSessionResponse,
+    ],
+    default=grpc.UnaryUnaryMultiCallable[
+        jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
+        jumpstarter.v1.jumpstarter_pb2.EndSessionResponse,
+    ],
+)
+
+class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _ExporterServiceDriverCallType, _ExporterServiceStreamingDriverCallType, _ExporterServiceLogStreamType, _ExporterServiceResetType, _ExporterServiceGetStatusType, _ExporterServiceEndSessionType]):
     """A service a exporter can share locally to be used without a server
     Channel/Call credentials are used to authenticate the client, and routing to the right exporter
     """
@@ -631,6 +647,10 @@ class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _Exporte
             jumpstarter.v1.jumpstarter_pb2.GetStatusRequest,
             jumpstarter.v1.jumpstarter_pb2.GetStatusResponse,
         ],
+        grpc.UnaryUnaryMultiCallable[
+            jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
+            jumpstarter.v1.jumpstarter_pb2.EndSessionResponse,
+        ],
     ], channel: grpc.Channel) -> None: ...
 
     @typing.overload
@@ -659,6 +679,10 @@ class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _Exporte
             jumpstarter.v1.jumpstarter_pb2.GetStatusRequest,
             jumpstarter.v1.jumpstarter_pb2.GetStatusResponse,
         ],
+        grpc.aio.UnaryUnaryMultiCallable[
+            jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
+            jumpstarter.v1.jumpstarter_pb2.EndSessionResponse,
+        ],
     ], channel: grpc.aio.Channel) -> None: ...
 
     GetReport: _ExporterServiceGetReportType
@@ -673,6 +697,12 @@ class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _Exporte
     Reset: _ExporterServiceResetType
 
     GetStatus: _ExporterServiceGetStatusType
+
+    EndSession: _ExporterServiceEndSessionType
+    """End the current session, triggering the afterLease hook
+    The client should keep the connection open to receive hook logs via LogStream
+    Returns after the afterLease hook completes
+    """
 
 ExporterServiceAsyncStub: typing_extensions.TypeAlias = ExporterServiceStub[
     grpc.aio.UnaryUnaryMultiCallable[
@@ -698,6 +728,10 @@ ExporterServiceAsyncStub: typing_extensions.TypeAlias = ExporterServiceStub[
     grpc.aio.UnaryUnaryMultiCallable[
         jumpstarter.v1.jumpstarter_pb2.GetStatusRequest,
         jumpstarter.v1.jumpstarter_pb2.GetStatusResponse,
+    ],
+    grpc.aio.UnaryUnaryMultiCallable[
+        jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
+        jumpstarter.v1.jumpstarter_pb2.EndSessionResponse,
     ],
 ]
 
@@ -748,5 +782,16 @@ class ExporterServiceServicer(metaclass=abc.ABCMeta):
         request: jumpstarter.v1.jumpstarter_pb2.GetStatusRequest,
         context: _ServicerContext,
     ) -> typing.Union[jumpstarter.v1.jumpstarter_pb2.GetStatusResponse, collections.abc.Awaitable[jumpstarter.v1.jumpstarter_pb2.GetStatusResponse]]: ...
+
+    @abc.abstractmethod
+    def EndSession(
+        self,
+        request: jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
+        context: _ServicerContext,
+    ) -> typing.Union[jumpstarter.v1.jumpstarter_pb2.EndSessionResponse, collections.abc.Awaitable[jumpstarter.v1.jumpstarter_pb2.EndSessionResponse]]:
+        """End the current session, triggering the afterLease hook
+        The client should keep the connection open to receive hook logs via LogStream
+        Returns after the afterLease hook completes
+        """
 
 def add_ExporterServiceServicer_to_server(servicer: ExporterServiceServicer, server: typing.Union[grpc.Server, grpc.aio.Server]) -> None: ...

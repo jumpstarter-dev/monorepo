@@ -165,63 +165,67 @@ class HookExecutor:
         cause: Exception | None = None
         timed_out = False
 
-        try:
-            # Execute the hook command using shell via anyio
-            # Pass the command as a string to use shell mode
-            async with await open_process(
-                command,
-                env=hook_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            ) as process:
-                output_lines: list[str] = []
+        # Route hook output logs to the client via the session's log stream
+        with logging_session.context_log_source(__name__, log_source):
+            try:
+                # Execute the hook command using shell via anyio
+                # Pass the command as a string to use shell mode
+                async with await open_process(
+                    command,
+                    env=hook_env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                ) as process:
+                    output_lines: list[str] = []
+                    # Create hook label for log output (e.g., "beforeLease" or "afterLease")
+                    hook_label = "beforeLease" if hook_type == "before_lease" else "afterLease"
 
-                async def read_output() -> None:
-                    """Read stdout line by line."""
-                    assert process.stdout is not None
-                    buffer = b""
-                    async for chunk in process.stdout:
-                        buffer += chunk
-                        while b"\n" in buffer:
-                            line, buffer = buffer.split(b"\n", 1)
-                            line_decoded = line.decode().rstrip()
-                            output_lines.append(line_decoded)
-                            logger.info("[hook output] %s", line_decoded)
-                    # Handle any remaining data without newline
-                    if buffer:
-                        line_decoded = buffer.decode().rstrip()
-                        if line_decoded:
-                            output_lines.append(line_decoded)
-                            logger.info("[hook output] %s", line_decoded)
+                    async def read_output() -> None:
+                        """Read stdout line by line."""
+                        assert process.stdout is not None
+                        buffer = b""
+                        async for chunk in process.stdout:
+                            buffer += chunk
+                            while b"\n" in buffer:
+                                line, buffer = buffer.split(b"\n", 1)
+                                line_decoded = line.decode().rstrip()
+                                output_lines.append(line_decoded)
+                                logger.info("[%s hook] %s", hook_label, line_decoded)
+                        # Handle any remaining data without newline
+                        if buffer:
+                            line_decoded = buffer.decode().rstrip()
+                            if line_decoded:
+                                output_lines.append(line_decoded)
+                                logger.info("[%s hook] %s", hook_label, line_decoded)
 
-                # Use move_on_after for timeout
-                with anyio.move_on_after(timeout) as cancel_scope:
-                    await read_output()
-                    await process.wait()
-
-                if cancel_scope.cancelled_caught:
-                    timed_out = True
-                    error_msg = f"Hook timed out after {timeout} seconds"
-                    logger.error(error_msg)
-                    # Terminate the process
-                    process.terminate()
-                    # Give it a moment to terminate gracefully
-                    with anyio.move_on_after(5):
+                    # Use move_on_after for timeout
+                    with anyio.move_on_after(timeout) as cancel_scope:
+                        await read_output()
                         await process.wait()
-                    # Force kill if still running
-                    if process.returncode is None:
-                        process.kill()
 
-                elif process.returncode == 0:
-                    logger.info("Hook executed successfully")
-                    return
-                else:
-                    error_msg = f"Hook failed with exit code {process.returncode}"
+                    if cancel_scope.cancelled_caught:
+                        timed_out = True
+                        error_msg = f"Hook timed out after {timeout} seconds"
+                        logger.error(error_msg)
+                        # Terminate the process
+                        process.terminate()
+                        # Give it a moment to terminate gracefully
+                        with anyio.move_on_after(5):
+                            await process.wait()
+                        # Force kill if still running
+                        if process.returncode is None:
+                            process.kill()
 
-        except Exception as e:
-            error_msg = f"Error executing hook: {e}"
-            cause = e
-            logger.error(error_msg, exc_info=True)
+                    elif process.returncode == 0:
+                        logger.info("Hook executed successfully")
+                        return
+                    else:
+                        error_msg = f"Hook failed with exit code {process.returncode}"
+
+            except Exception as e:
+                error_msg = f"Error executing hook: {e}"
+                cause = e
+                logger.error(error_msg, exc_info=True)
 
         # Handle failure if one occurred
         if error_msg is not None:

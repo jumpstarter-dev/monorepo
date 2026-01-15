@@ -28,6 +28,8 @@ class LeaseContext:
         session: The Session object managing the device and gRPC services (set in handle_lease)
         socket_path: Unix socket path where the session is serving (set in handle_lease)
         before_lease_hook: Event that signals when before-lease hook completes
+        end_session_requested: Event that signals when client requests end session (to run afterLease hook)
+        after_lease_hook_done: Event that signals when afterLease hook has completed
         client_name: Name of the client currently holding the lease (empty if unleased)
         current_status: Current exporter status (stored here for access before session is created)
         status_message: Message describing the current status
@@ -35,6 +37,8 @@ class LeaseContext:
 
     lease_name: str
     before_lease_hook: Event
+    end_session_requested: Event = field(default_factory=Event)
+    after_lease_hook_done: Event = field(default_factory=Event)
     session: "Session | None" = None
     socket_path: str = ""
     client_name: str = field(default="")

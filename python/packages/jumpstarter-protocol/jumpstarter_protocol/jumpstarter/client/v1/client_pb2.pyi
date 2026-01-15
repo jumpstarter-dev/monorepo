@@ -53,9 +53,11 @@ class Exporter(google.protobuf.message.Message):
     LABELS_FIELD_NUMBER: builtins.int
     ONLINE_FIELD_NUMBER: builtins.int
     STATUS_FIELD_NUMBER: builtins.int
+    STATUS_MESSAGE_FIELD_NUMBER: builtins.int
     name: builtins.str
     online: builtins.bool
     status: jumpstarter.v1.common_pb2.ExporterStatus.ValueType
+    status_message: builtins.str
     @property
     def labels(self) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]: ...
     def __init__(
@@ -65,8 +67,9 @@ class Exporter(google.protobuf.message.Message):
         labels: collections.abc.Mapping[builtins.str, builtins.str] | None = ...,
         online: builtins.bool = ...,
         status: jumpstarter.v1.common_pb2.ExporterStatus.ValueType = ...,
+        status_message: builtins.str = ...,
     ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["labels", b"labels", "name", b"name", "online", b"online", "status", b"status"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["labels", b"labels", "name", b"name", "online", b"online", "status", b"status", "status_message", b"status_message"]) -> None: ...
 
 Global___Exporter: typing_extensions.TypeAlias = Exporter
 

@@ -25,6 +25,7 @@ from jumpstarter.streams.router import RouterStream
 
 if TYPE_CHECKING:
     from jumpstarter.driver import Driver
+    from jumpstarter.exporter.lease_context import LeaseContext
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class Session(
 ):
     root_device: "Driver"
     mapping: dict[UUID, "Driver"]
+    lease_context: "LeaseContext | None" = field(init=False, default=None)
 
     _logging_queue: deque = field(init=False)
     _logging_handler: QueueHandler = field(init=False)
@@ -175,4 +177,38 @@ class Session(
         return jumpstarter_pb2.GetStatusResponse(
             status=self._current_status.to_proto(),
             message=self._status_message,
+        )
+
+    async def EndSession(self, request, context):
+        """End the current session and trigger the afterLease hook.
+
+        This is called by the client when it's done with the session but wants
+        to keep the connection open to receive logs from the afterLease hook.
+        The method signals the end_session_requested event and waits for the
+        afterLease hook to complete before returning.
+
+        Returns:
+            EndSessionResponse with success status and optional message.
+        """
+        logger.info("EndSession called by client")
+
+        if self.lease_context is None:
+            logger.warning("EndSession called but no lease context available")
+            return jumpstarter_pb2.EndSessionResponse(
+                success=False,
+                message="No active lease context",
+            )
+
+        # Signal that the client wants to end the session
+        logger.debug("Setting end_session_requested event")
+        self.lease_context.end_session_requested.set()
+
+        # Wait for the afterLease hook to complete
+        logger.debug("Waiting for after_lease_hook_done event")
+        await self.lease_context.after_lease_hook_done.wait()
+        logger.info("EndSession complete, afterLease hook finished")
+
+        return jumpstarter_pb2.EndSessionResponse(
+            success=True,
+            message="Session ended and afterLease hook completed",
         )

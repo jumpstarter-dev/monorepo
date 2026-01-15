@@ -715,3 +715,33 @@ class GetStatusResponse(google.protobuf.message.Message):
     def WhichOneof(self, oneof_group: typing.Literal["_message", b"_message"]) -> typing.Literal["message"] | None: ...
 
 Global___GetStatusResponse: typing_extensions.TypeAlias = GetStatusResponse
+
+@typing.final
+class EndSessionRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+Global___EndSessionRequest: typing_extensions.TypeAlias = EndSessionRequest
+
+@typing.final
+class EndSessionResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SUCCESS_FIELD_NUMBER: builtins.int
+    MESSAGE_FIELD_NUMBER: builtins.int
+    success: builtins.bool
+    message: builtins.str
+    def __init__(
+        self,
+        *,
+        success: builtins.bool = ...,
+        message: builtins.str | None = ...,
+    ) -> None: ...
+    def HasField(self, field_name: typing.Literal["_message", b"_message", "message", b"message"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["_message", b"_message", "message", b"message", "success", b"success"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["_message", b"_message"]) -> typing.Literal["message"] | None: ...
+
+Global___EndSessionResponse: typing_extensions.TypeAlias = EndSessionResponse
