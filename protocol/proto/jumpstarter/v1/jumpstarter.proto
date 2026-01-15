@@ -133,6 +133,10 @@ service ExporterService {
   rpc LogStream(google.protobuf.Empty) returns (stream LogStreamResponse);
   rpc Reset(ResetRequest) returns (ResetResponse);
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  // End the current session, triggering the afterLease hook
+  // The client should keep the connection open to receive hook logs via LogStream
+  // Returns after the afterLease hook completes
+  rpc EndSession(EndSessionRequest) returns (EndSessionResponse);
 }
 
 message GetReportResponse {
@@ -222,5 +226,12 @@ message GetStatusRequest {}
 
 message GetStatusResponse {
   ExporterStatus status = 1;
+  optional string message = 2;
+}
+
+message EndSessionRequest {}
+
+message EndSessionResponse {
+  bool success = 1;
   optional string message = 2;
 }
