@@ -2,13 +2,11 @@
 
 import logging
 import os
-import subprocess
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Literal
 
 import anyio
-from anyio import open_process
 
 from jumpstarter.common import ExporterStatus, LogSource
 from jumpstarter.config.env import JMP_DRIVERS_ALLOW, JUMPSTARTER_HOST
@@ -93,7 +91,7 @@ class HookExecutor:
             logger.debug("Hook command is empty, skipping")
             return
 
-        logger.info("Executing hook: %s", command.strip().split("\n")[0][:100])
+        logger.debug("Executing hook: %s", command.strip().split("\n")[0][:100])
 
         # Determine hook type from log source
         hook_type = "before_lease" if log_source == LogSource.BEFORE_LEASE_HOOK else "after_lease"
@@ -152,9 +150,11 @@ class HookExecutor:
     ) -> None:
         """Execute the hook process with the given environment and logging session.
 
-        Uses anyio for subprocess execution to be compatible with the anyio-based exporter.
+        Uses subprocess with a PTY to force line buffering in the subprocess,
+        ensuring logs stream in real-time rather than being block-buffered.
         """
-
+        import pty
+        import subprocess
 
         command = hook_config.script
         timeout = hook_config.timeout
@@ -167,65 +167,141 @@ class HookExecutor:
 
         # Route hook output logs to the client via the session's log stream
         with logging_session.context_log_source(__name__, log_source):
-            try:
-                # Execute the hook command using shell via anyio
-                # Pass the command as a string to use shell mode
-                async with await open_process(
-                    command,
-                    env=hook_env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                ) as process:
-                    output_lines: list[str] = []
-                    # Create hook label for log output (e.g., "beforeLease" or "afterLease")
-                    hook_label = "beforeLease" if hook_type == "before_lease" else "afterLease"
+            # Create a PTY pair - this forces line buffering in the subprocess
+            logger.info("Starting hook subprocess...")
+            master_fd, slave_fd = pty.openpty()
 
-                    async def read_output() -> None:
-                        """Read stdout line by line."""
-                        assert process.stdout is not None
-                        buffer = b""
-                        async for chunk in process.stdout:
-                            buffer += chunk
+            # Track which fds are still open (use list for mutability in nested scope)
+            fds_open = {"master": True, "slave": True}
+
+            process: subprocess.Popen | None = None
+            try:
+                # Use subprocess.Popen with the PTY slave as stdin/stdout/stderr
+                # This avoids the issues with os.fork() in async contexts
+                process = subprocess.Popen(
+                    ["/bin/sh", "-c", command],
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    env=hook_env,
+                    start_new_session=True,  # Equivalent to os.setsid()
+                )
+                # Close slave in parent - subprocess has it now
+                os.close(slave_fd)
+                fds_open["slave"] = False
+
+                output_lines: list[str] = []
+
+                # Set master fd to non-blocking mode
+                import fcntl
+                flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+                fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                async def read_pty_output() -> None:
+                    """Read from PTY master fd line by line using non-blocking I/O."""
+                    buffer = b""
+                    while fds_open["master"]:
+                        try:
+                            # Wait for fd to be readable with timeout
+                            with anyio.move_on_after(0.1):
+                                await anyio.wait_readable(master_fd)
+
+                            # Read available data (non-blocking)
+                            try:
+                                chunk = os.read(master_fd, 4096)
+                                if not chunk:
+                                    # EOF
+                                    break
+                                buffer += chunk
+                            except BlockingIOError:
+                                # No data available right now, continue loop
+                                continue
+                            except OSError:
+                                # PTY closed or error
+                                break
+
+                            # Process complete lines
                             while b"\n" in buffer:
                                 line, buffer = buffer.split(b"\n", 1)
-                                line_decoded = line.decode().rstrip()
-                                output_lines.append(line_decoded)
-                                logger.info("[%s hook] %s", hook_label, line_decoded)
-                        # Handle any remaining data without newline
-                        if buffer:
-                            line_decoded = buffer.decode().rstrip()
-                            if line_decoded:
-                                output_lines.append(line_decoded)
-                                logger.info("[%s hook] %s", hook_label, line_decoded)
+                                line_decoded = line.decode(errors="replace").rstrip()
+                                if line_decoded:
+                                    output_lines.append(line_decoded)
+                                    logger.info("%s", line_decoded)
 
-                    # Use move_on_after for timeout
-                    with anyio.move_on_after(timeout) as cancel_scope:
-                        await read_output()
-                        await process.wait()
+                        except OSError:
+                            # PTY closed or read error
+                            break
 
-                    if cancel_scope.cancelled_caught:
-                        timed_out = True
-                        error_msg = f"Hook timed out after {timeout} seconds"
-                        logger.error(error_msg)
-                        # Terminate the process
+                    # Handle any remaining data without newline
+                    if buffer:
+                        line_decoded = buffer.decode(errors="replace").rstrip()
+                        if line_decoded:
+                            output_lines.append(line_decoded)
+                            logger.info("%s", line_decoded)
+
+                async def wait_for_process() -> int:
+                    """Wait for the subprocess to complete."""
+                    return await anyio.to_thread.run_sync(
+                        process.wait,
+                        abandon_on_cancel=True
+                    )
+
+                # Use move_on_after for timeout
+                returncode: int | None = None
+                with anyio.move_on_after(timeout) as cancel_scope:
+                    # Run output reading and process waiting concurrently
+                    async with anyio.create_task_group() as tg:
+                        tg.start_soon(read_pty_output)
+                        returncode = await wait_for_process()
+                        # Give a brief moment for any final output to be read
+                        await anyio.sleep(0.2)
+                        # Signal the read task to stop by marking fd as closed
+                        # The read task checks fds_open["master"] in its loop
+                        fds_open["master"] = False
+                        # The task group will wait for read_pty_output to complete
+                        # after it sees fds_open["master"] is False on next iteration
+
+                if cancel_scope.cancelled_caught:
+                    timed_out = True
+                    error_msg = f"Hook timed out after {timeout} seconds"
+                    logger.error(error_msg)
+                    # Terminate the process
+                    if process and process.poll() is None:
                         process.terminate()
                         # Give it a moment to terminate gracefully
-                        with anyio.move_on_after(5):
-                            await process.wait()
+                        try:
+                            with anyio.move_on_after(5):
+                                await anyio.to_thread.run_sync(process.wait)
+                        except Exception:
+                            pass
                         # Force kill if still running
-                        if process.returncode is None:
+                        if process.poll() is None:
                             process.kill()
+                            try:
+                                process.wait()
+                            except Exception:
+                                pass
 
-                    elif process.returncode == 0:
-                        logger.info("Hook executed successfully")
-                        return
-                    else:
-                        error_msg = f"Hook failed with exit code {process.returncode}"
+                elif returncode == 0:
+                    logger.info("Hook executed successfully")
+                    return
+                else:
+                    error_msg = f"Hook failed with exit code {returncode}"
 
             except Exception as e:
                 error_msg = f"Error executing hook: {e}"
                 cause = e
                 logger.error(error_msg, exc_info=True)
+            finally:
+                # Clean up the file descriptors (always close, fds_open tracks logical state)
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+                try:
+                    os.close(slave_fd)
+                except OSError:
+                    pass
 
         # Handle failure if one occurred
         if error_msg is not None:
@@ -366,6 +442,7 @@ class HookExecutor:
         lease_scope: "LeaseContext",
         report_status: Callable[["ExporterStatus", str], Awaitable[None]],
         shutdown: Callable[..., None],
+        request_lease_release: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Execute after-lease hook with full orchestration.
 
@@ -375,11 +452,13 @@ class HookExecutor:
         - Sets up the hook executor with the session for logging
         - Executes the hook and handles errors
         - Triggers shutdown on critical failures (HookExecutionError)
+        - Requests lease release from controller after hook completes
 
         Args:
             lease_scope: LeaseScope containing session, socket_path, and client info
             report_status: Async callback to report status changes to controller
             shutdown: Callback to trigger exporter shutdown (accepts optional exit_code kwarg)
+            request_lease_release: Async callback to request lease release from controller
         """
         try:
             # Verify lease scope is ready - for after-lease this should always be true
@@ -436,3 +515,9 @@ class HookExecutor:
                 f"afterLease hook failed: {e}",
             )
             # Unexpected errors don't trigger shutdown - exporter remains available
+
+        finally:
+            # Request lease release from controller after hook completes (success or failure)
+            # This ensures the lease is always released even if the client disconnects
+            if request_lease_release:
+                await request_lease_release()

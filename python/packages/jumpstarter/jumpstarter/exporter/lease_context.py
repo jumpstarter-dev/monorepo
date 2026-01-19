@@ -29,6 +29,7 @@ class LeaseContext:
         socket_path: Unix socket path where the session is serving (set in handle_lease)
         before_lease_hook: Event that signals when before-lease hook completes
         end_session_requested: Event that signals when client requests end session (to run afterLease hook)
+        after_lease_hook_started: Event that signals when afterLease hook has started (prevents double execution)
         after_lease_hook_done: Event that signals when afterLease hook has completed
         client_name: Name of the client currently holding the lease (empty if unleased)
         current_status: Current exporter status (stored here for access before session is created)
@@ -38,6 +39,7 @@ class LeaseContext:
     lease_name: str
     before_lease_hook: Event
     end_session_requested: Event = field(default_factory=Event)
+    after_lease_hook_started: Event = field(default_factory=Event)
     after_lease_hook_done: Event = field(default_factory=Event)
     session: "Session | None" = None
     socket_path: str = ""
@@ -86,3 +88,19 @@ class LeaseContext:
         # Also update session if it exists
         if self.session:
             self.session.update_status(status, message)
+
+    def drivers_ready(self) -> bool:
+        """Check if drivers are ready for use (beforeLease hook completed).
+
+        Returns True if the beforeLease hook has completed and drivers can be accessed.
+        Used by Session to gate driver calls during hook execution.
+        """
+        return self.before_lease_hook.is_set()
+
+    async def wait_for_drivers(self) -> None:
+        """Wait for drivers to be ready (beforeLease hook to complete).
+
+        This method blocks until the beforeLease hook completes, allowing
+        clients to connect early but wait for driver access.
+        """
+        await self.before_lease_hook.wait()

@@ -46,7 +46,7 @@ class LogHandler(logging.Handler):
         return jumpstarter_pb2.LogStreamResponse(
             uuid="",
             severity=record.levelname,
-            message=self.format(record),
+            message=record.getMessage(),  # Use getMessage() directly to avoid formatter
             source=source.value,  # Convert to proto value
         )
 

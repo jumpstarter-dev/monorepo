@@ -314,6 +314,32 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         except Exception as e:
             logger.error(f"Failed to update status: {e}")
 
+    async def _request_lease_release(self):
+        """Request the controller to release the current lease.
+
+        Called after the afterLease hook completes to ensure the lease is
+        released even if the client disconnects unexpectedly. This moves
+        the lease release responsibility from the client to the exporter.
+        """
+        if not self._lease_context or not self._lease_context.lease_name:
+            logger.debug("No active lease to release")
+            return
+
+        try:
+            controller = await self._get_controller_stub()
+            await controller.ReportStatus(
+                jumpstarter_pb2.ReportStatusRequest(
+                    status=ExporterStatus.AVAILABLE.to_proto(),
+                    message="Lease released after afterLease hook",
+                    release_lease=True,
+                )
+            )
+            logger.info("Requested controller to release lease %s", self._lease_context.lease_name)
+        except Exception as e:
+            logger.error("Failed to request lease release: %s", e)
+            # Fall through - the client can still release the lease as a fallback,
+            # or the lease will eventually expire
+
     async def _unregister_with_controller(self):
         """Safely unregister from controller with timeout and error handling."""
         if not (self._registered and self._unregister):
@@ -392,12 +418,22 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         logger.info("EndSession requested, running afterLease hook")
 
         try:
+            # Check if hook already started (via lease state transition)
+            if lease_context.after_lease_hook_started.is_set():
+                logger.debug("afterLease hook already started via lease state transition, waiting for completion")
+                await lease_context.after_lease_hook_done.wait()
+                return
+
+            # Mark hook as started to prevent duplicate execution
+            lease_context.after_lease_hook_started.set()
+
             if self.hook_executor and lease_context.has_client():
                 with CancelScope(shield=True):
                     await self.hook_executor.run_after_lease_hook(
                         lease_context,
                         self._report_status,
                         self.stop,
+                        self._request_lease_release,
                     )
                 logger.info("afterLease hook completed via EndSession")
             else:
@@ -475,30 +511,39 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             # Link session to lease context for EndSession RPC
             session.lease_context = lease_scope
 
-            # Wait for before-lease hook to complete before processing client connections
-            logger.info("Waiting for before-lease hook to complete before accepting connections")
-            await lease_scope.before_lease_hook.wait()
-            logger.info("Before-lease hook completed, now accepting connections")
+            # Accept connections immediately - driver calls will be gated internally
+            # until the beforeLease hook completes. This allows LogStream to work
+            # during hook execution for real-time log streaming.
+            logger.info("Accepting connections (driver calls gated until beforeLease hook completes)")
 
-            # Sync status to session AFTER hook completes - this ensures we have LEASE_READY
-            # status from serve() rather than the default AVAILABLE
+            # Sync status to session - this is updated by the hook runner
             session.update_status(lease_scope.current_status, lease_scope.status_message)
 
             # Start task to handle EndSession requests (runs afterLease hook when client signals done)
             tg.start_soon(self._handle_end_session, lease_scope)
 
-            # Process client connections
+            # Process client connections immediately
             # Type: request is jumpstarter_pb2.ListenResponse with router_endpoint and router_token fields
-            async for request in listen_rx:
-                logger.info("Handling new connection request on lease %s", lease_name)
-                tg.start_soon(
-                    self._handle_client_conn,
-                    lease_scope.socket_path,
-                    request.router_endpoint,
-                    request.router_token,
-                    self.tls,
-                    self.grpc_options,
-                )
+            try:
+                async for request in listen_rx:
+                    logger.info("Handling new connection request on lease %s", lease_name)
+                    tg.start_soon(
+                        self._handle_client_conn,
+                        lease_scope.socket_path,
+                        request.router_endpoint,
+                        request.router_token,
+                        self.tls,
+                        self.grpc_options,
+                    )
+            finally:
+                # Wait for afterLease hook to complete before closing the session
+                # This ensures the socket is still available for driver calls within the hook
+                # Shield this wait from cancellation so the hook can complete even during shutdown
+                with CancelScope(shield=True):
+                    if lease_scope.end_session_requested.is_set():
+                        logger.debug("Waiting for afterLease hook to complete before closing session")
+                        await lease_scope.after_lease_hook_done.wait()
+                        logger.debug("afterLease hook completed, closing session")
 
     async def serve(self):  # noqa: C901
         """
@@ -527,17 +572,21 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                 )
                 if lease_changed:
                     # After-lease hook for the previous lease (lease name changed)
-                    # Skip if already run via EndSession
+                    # Skip if already started via EndSession
                     if (
                         self.hook_executor
                         and self._lease_context.has_client()
-                        and not self._lease_context.after_lease_hook_done.is_set()
+                        and not self._lease_context.after_lease_hook_started.is_set()
                     ):
+                        # Mark hook as started to prevent duplicate execution
+                        self._lease_context.after_lease_hook_started.set()
+
                         with CancelScope(shield=True):
                             await self.hook_executor.run_after_lease_hook(
                                 self._lease_context,
                                 self._report_status,
                                 self.stop,
+                                self._request_lease_release,
                             )
 
                     logger.info("Lease status changed, killing existing connections")
@@ -585,20 +634,24 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                     logger.info("Currently not leased")
 
                     # After-lease hook when transitioning from leased to unleased
-                    # Skip if already run via EndSession
+                    # Skip if already started via EndSession
                     if (
                         previous_leased
                         and self.hook_executor
                         and self._lease_context
                         and self._lease_context.has_client()
-                        and not self._lease_context.after_lease_hook_done.is_set()
+                        and not self._lease_context.after_lease_hook_started.is_set()
                     ):
+                        # Mark hook as started to prevent duplicate execution
+                        self._lease_context.after_lease_hook_started.set()
+
                         # Shield the after-lease hook from cancellation
                         with CancelScope(shield=True):
                             await self.hook_executor.run_after_lease_hook(
                                 self._lease_context,
                                 self._report_status,
                                 self.stop,
+                                self._request_lease_release,
                             )
 
                     # Clear lease scope for next lease

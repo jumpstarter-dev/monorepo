@@ -81,7 +81,7 @@ class AsyncDriverClient(
 
         # add default handler
         if not self.logger.handlers:
-            handler = RichHandler()
+            handler = RichHandler(show_path=False)
             self.logger.addHandler(handler)
 
     async def get_status_async(self) -> ExporterStatus | None:
@@ -122,14 +122,73 @@ class AsyncDriverClient(
         if status not in ALLOWED_STATUSES:
             raise ExporterNotReady(f"Exporter status is {status}")
 
-    async def end_session_async(self) -> bool:
-        """End the current session and wait for afterLease hook to complete.
+    async def wait_for_lease_ready(self, timeout: float = 300.0) -> None:
+        """Wait for exporter to report LEASE_READY status.
 
-        This signals the exporter to run the afterLease hook while keeping
-        the connection open, allowing the client to receive hook logs.
+        This polls GetStatus until the beforeLease hook completes.
+        Should be called after log streaming is started so hook output
+        can be displayed in real-time.
+
+        Args:
+            timeout: Maximum time to wait in seconds (default: 5 minutes)
+        """
+        import anyio
+
+        poll_interval = 0.5  # seconds
+        elapsed = 0.0
+
+        self.logger.info("Waiting for exporter to be ready...")
+        while elapsed < timeout:
+            try:
+                status = await self.get_status_async()
+                self.logger.debug("GetStatus returned: %s", status)
+            except Exception as e:
+                # Connection error - keep trying
+                self.logger.debug("Error getting status, will retry: %s", e)
+                await anyio.sleep(poll_interval)
+                elapsed += poll_interval
+                continue
+
+            if status is None:
+                # GetStatus not implemented - assume ready for backward compatibility
+                self.logger.debug("GetStatus not implemented, assuming ready")
+                return
+
+            if status == ExporterStatus.LEASE_READY:
+                self.logger.info("Exporter ready, starting shell...")
+                return
+            elif status == ExporterStatus.BEFORE_LEASE_HOOK:
+                # Hook is running - this is expected, keep waiting
+                self.logger.debug("beforeLease hook is running...")
+            elif status == ExporterStatus.BEFORE_LEASE_HOOK_FAILED:
+                # Hook failed - log but continue (exporter may still be usable)
+                self.logger.warning("beforeLease hook failed")
+                return
+            elif status == ExporterStatus.AVAILABLE:
+                # Exporter is available but not yet leased - keep waiting
+                # This can happen if client connects before exporter receives lease assignment
+                self.logger.info("Exporter status: AVAILABLE (waiting for lease assignment)")
+            else:
+                # Other status - continue waiting
+                self.logger.info("Exporter status: %s (waiting...)", status)
+
+            await anyio.sleep(poll_interval)
+            elapsed += poll_interval
+
+        self.logger.warning("Timeout waiting for beforeLease hook to complete")
+
+    async def end_session_async(self) -> bool:
+        """End the current session and trigger the afterLease hook.
+
+        This signals the exporter to run the afterLease hook. The exporter will
+        release the lease after the hook completes, which may cause the connection
+        to be disrupted. Connection errors after EndSession is called are treated
+        as successful completion (the hook ran and the lease was released).
 
         Returns:
-            True if the session ended successfully, False if EndSession is not implemented.
+            True if the session end was triggered successfully or the connection
+            was disrupted (indicating the lease was released), False if EndSession
+            is not implemented.
         """
         try:
             response = await self.stub.EndSession(jumpstarter_pb2.EndSessionRequest())
@@ -140,7 +199,65 @@ class AsyncDriverClient(
             if e.code() == StatusCode.UNIMPLEMENTED:
                 self.logger.debug("EndSession not implemented")
                 return False
+            # Connection errors (UNAVAILABLE, CANCELLED, UNKNOWN with "Stream removed")
+            # indicate the exporter has released the lease and restarted
+            if e.code() in (StatusCode.UNAVAILABLE, StatusCode.CANCELLED):
+                self.logger.debug("Connection disrupted during EndSession (lease released): %s", e.code())
+                return True
+            if e.code() == StatusCode.UNKNOWN and "Stream removed" in str(e.details()):
+                self.logger.debug("Stream removed during EndSession (lease released)")
+                return True
             raise DriverError(f"Failed to end session: {e.details()}") from e
+
+    async def wait_for_hook_status(self, target_status: "ExporterStatus", timeout: float = 60.0) -> bool:
+        """Wait for exporter to reach a target status.
+
+        Used after end_session_async() to wait for afterLease hook completion
+        while keeping the log stream open to receive hook logs.
+
+        Args:
+            target_status: The status to wait for (typically AVAILABLE)
+            timeout: Maximum time to wait in seconds (default: 60 seconds)
+
+        Returns:
+            True if target status was reached, False if timed out
+        """
+        import anyio
+
+        poll_interval = 0.5  # seconds
+        elapsed = 0.0
+
+        while elapsed < timeout:
+            try:
+                status = await self.get_status_async()
+
+                if status is None:
+                    # GetStatus not implemented - assume ready for backward compatibility
+                    self.logger.debug("GetStatus not implemented, assuming hook complete")
+                    return True
+
+                if status == target_status:
+                    self.logger.debug("Exporter reached target status: %s", status)
+                    return True
+
+                # Hook failed states also indicate completion
+                if status == ExporterStatus.AFTER_LEASE_HOOK_FAILED:
+                    self.logger.warning("afterLease hook failed")
+                    return True
+
+                # Still running hook - keep waiting
+                self.logger.debug("Waiting for hook completion, current status: %s", status)
+
+            except AioRpcError as e:
+                # Connection error - the hook may still be running but we can't confirm
+                self.logger.debug("Connection error while waiting for hook: %s", e.code())
+                return False
+
+            await anyio.sleep(poll_interval)
+            elapsed += poll_interval
+
+        self.logger.warning("Timeout waiting for hook to complete (target: %s)", target_status)
+        return False
 
     async def call_async(self, method, *args):
         """Make DriverCall by method name and arguments"""
@@ -230,14 +347,47 @@ class AsyncDriverClient(
             async with forward_stream(ProgressStream(stream=stream), rstream):
                 yield metadata.resource.model_dump(mode="json")
 
-    def __log(self, level: int, msg: str):
-        self.logger.log(level, msg)
-
     @asynccontextmanager
-    async def log_stream_async(self):
+    async def log_stream_async(self, show_all_logs: bool = True):
         async def log_stream():
-            async for response in self.stub.LogStream(empty_pb2.Empty()):
-                self.__log(logging.getLevelName(response.severity), response.message)
+            from jumpstarter.common import LogSource
+
+            try:
+                async for response in self.stub.LogStream(empty_pb2.Empty()):
+                    # Determine log source
+                    if response.HasField("source"):
+                        source = LogSource(response.source)
+                        is_hook = source in (LogSource.BEFORE_LEASE_HOOK, LogSource.AFTER_LEASE_HOOK)
+                    else:
+                        source = LogSource.SYSTEM
+                        is_hook = False
+
+                    # Filter: always show hooks, only show system logs if enabled
+                    if is_hook or show_all_logs:
+                        # Get severity level
+                        severity = response.severity if response.severity else "INFO"
+                        log_level = getattr(logging, severity, logging.INFO)
+
+                        # Route to appropriate logger based on source
+                        if source == LogSource.BEFORE_LEASE_HOOK:
+                            logger_name = "exporter:beforeLease"
+                        elif source == LogSource.AFTER_LEASE_HOOK:
+                            logger_name = "exporter:afterLease"
+                        elif source == LogSource.DRIVER:
+                            logger_name = "exporter:driver"
+                        else:  # SYSTEM
+                            logger_name = "exporter:system"
+
+                        # Log through logger for RichHandler formatting
+                        source_logger = logging.getLogger(logger_name)
+                        source_logger.log(log_level, response.message)
+            except AioRpcError as e:
+                # Connection disrupted - exit gracefully without raising
+                # This can happen when the session ends or network issues occur
+                self.logger.debug("Log stream ended: %s", e.code())
+            except Exception as e:
+                # Other errors - log and exit gracefully
+                self.logger.debug("Log stream error: %s", e)
 
         async with create_task_group() as tg:
             tg.start_soon(log_stream)

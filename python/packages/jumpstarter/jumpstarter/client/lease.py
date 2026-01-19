@@ -244,16 +244,22 @@ class Lease(ContextManagerMixin, AsyncContextManagerMixin):
         async with TemporaryUnixListener(self.handle_async) as path:
             logger.debug("Serving Unix socket at %s", path)
             await self._wait_for_ready_connection(path)
-            # TODO: talk to the exporter to make sure it's ready.... (once we have the hooks)
             yield path
 
     async def _wait_for_ready_connection(self, path: str):
+        """Wait for the basic gRPC connection to be established.
+
+        This only waits for the connection to be available. It does NOT wait
+        for beforeLease hooks to complete - that should be done after log
+        streaming is started so hook output can be displayed in real-time.
+        """
         retries_left = 5
         logger.info("Waiting for ready connection at %s", path)
         while True:
             try:
                 with ExitStack() as stack:
                     async with client_from_path(path, self.portal, stack, allow=self.allow, unsafe=self.unsafe) as _:
+                        # Connection established
                         break
             except AioRpcError as e:
                 if retries_left > 1:

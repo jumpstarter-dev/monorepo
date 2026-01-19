@@ -149,7 +149,8 @@ class Session(
             try:
                 yield self._logging_queue.popleft()
             except IndexError:
-                await sleep(0.5)
+                # Short polling interval for real-time log streaming
+                await sleep(0.05)
 
     def update_status(self, status: int | ExporterStatus, message: str = ""):
         """Update the current exporter status for the session."""
@@ -173,7 +174,7 @@ class Session(
 
     async def GetStatus(self, request, context):
         """Get the current exporter status."""
-        logger.debug("GetStatus() -> %s", self._current_status)
+        logger.info("GetStatus() -> %s", self._current_status)
         return jumpstarter_pb2.GetStatusResponse(
             status=self._current_status.to_proto(),
             message=self._status_message,
