@@ -724,6 +724,36 @@ class GetStatusResponse(google.protobuf.message.Message):
 Global___GetStatusResponse: typing_extensions.TypeAlias = GetStatusResponse
 
 @typing.final
+class StreamStatusRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+Global___StreamStatusRequest: typing_extensions.TypeAlias = StreamStatusRequest
+
+@typing.final
+class StreamStatusResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STATUS_FIELD_NUMBER: builtins.int
+    MESSAGE_FIELD_NUMBER: builtins.int
+    status: jumpstarter.v1.common_pb2.ExporterStatus.ValueType
+    message: builtins.str
+    def __init__(
+        self,
+        *,
+        status: jumpstarter.v1.common_pb2.ExporterStatus.ValueType = ...,
+        message: builtins.str | None = ...,
+    ) -> None: ...
+    def HasField(self, field_name: typing.Literal["_message", b"_message", "message", b"message"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["_message", b"_message", "message", b"message", "status", b"status"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["_message", b"_message"]) -> typing.Literal["message"] | None: ...
+
+Global___StreamStatusResponse: typing_extensions.TypeAlias = StreamStatusResponse
+
+@typing.final
 class EndSessionRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 

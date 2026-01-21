@@ -572,6 +572,11 @@ class ExporterServiceStub(object):
                 request_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusRequest.SerializeToString,
                 response_deserializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusResponse.FromString,
                 _registered_method=True)
+        self.StreamStatus = channel.unary_stream(
+                '/jumpstarter.v1.ExporterService/StreamStatus',
+                request_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.StreamStatusRequest.SerializeToString,
+                response_deserializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.StreamStatusResponse.FromString,
+                _registered_method=True)
         self.EndSession = channel.unary_unary(
                 '/jumpstarter.v1.ExporterService/EndSession',
                 request_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.EndSessionRequest.SerializeToString,
@@ -621,6 +626,15 @@ class ExporterServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def StreamStatus(self, request, context):
+        """Stream status updates to the client
+        Returns immediately with current status, then streams updates as they occur
+        Use this instead of polling GetStatus for real-time status updates
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def EndSession(self, request, context):
         """End the current session, triggering the afterLease hook
         The client should keep the connection open to receive hook logs via LogStream
@@ -662,6 +676,11 @@ def add_ExporterServiceServicer_to_server(servicer, server):
                     servicer.GetStatus,
                     request_deserializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusRequest.FromString,
                     response_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusResponse.SerializeToString,
+            ),
+            'StreamStatus': grpc.unary_stream_rpc_method_handler(
+                    servicer.StreamStatus,
+                    request_deserializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.StreamStatusRequest.FromString,
+                    response_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.StreamStatusResponse.SerializeToString,
             ),
             'EndSession': grpc.unary_unary_rpc_method_handler(
                     servicer.EndSession,
@@ -833,6 +852,33 @@ class ExporterService(object):
             '/jumpstarter.v1.ExporterService/GetStatus',
             jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusRequest.SerializeToString,
             jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StreamStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/jumpstarter.v1.ExporterService/StreamStatus',
+            jumpstarter_dot_v1_dot_jumpstarter__pb2.StreamStatusRequest.SerializeToString,
+            jumpstarter_dot_v1_dot_jumpstarter__pb2.StreamStatusResponse.FromString,
             options,
             channel_credentials,
             insecure,

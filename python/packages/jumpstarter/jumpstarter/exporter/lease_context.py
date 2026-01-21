@@ -27,10 +27,12 @@ class LeaseContext:
         lease_name: Name of the current lease assigned by the controller
         session: The Session object managing the device and gRPC services (set in handle_lease)
         socket_path: Unix socket path where the session is serving (set in handle_lease)
+        hook_socket_path: Separate Unix socket for hook j commands to avoid SSL frame corruption
         before_lease_hook: Event that signals when before-lease hook completes
         end_session_requested: Event that signals when client requests end session (to run afterLease hook)
         after_lease_hook_started: Event that signals when afterLease hook has started (prevents double execution)
         after_lease_hook_done: Event that signals when afterLease hook has completed
+        lease_ended: Event that signals when the lease has ended (from controller status update)
         client_name: Name of the client currently holding the lease (empty if unleased)
         current_status: Current exporter status (stored here for access before session is created)
         status_message: Message describing the current status
@@ -41,8 +43,10 @@ class LeaseContext:
     end_session_requested: Event = field(default_factory=Event)
     after_lease_hook_started: Event = field(default_factory=Event)
     after_lease_hook_done: Event = field(default_factory=Event)
+    lease_ended: Event = field(default_factory=Event)  # Signals lease has ended (from controller)
     session: "Session | None" = None
     socket_path: str = ""
+    hook_socket_path: str = ""  # Separate socket for hook j commands to avoid SSL corruption
     client_name: str = field(default="")
     current_status: ExporterStatus = field(default=ExporterStatus.AVAILABLE)
     status_message: str = field(default="")

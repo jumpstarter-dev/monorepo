@@ -95,10 +95,52 @@ class Session(
             await server.stop(grace=None)
 
     @asynccontextmanager
+    async def serve_multi_port_async(self, *ports):
+        """Serve session on multiple ports simultaneously.
+
+        This is used to create separate sockets for client connections and hook
+        j commands, preventing SSL frame corruption when both are active.
+
+        Args:
+            *ports: One or more port specifications (e.g., "unix:///path/to/socket")
+
+        Yields:
+            None - caller manages socket paths externally
+        """
+        server = grpc.aio.server()
+        for port in ports:
+            server.add_insecure_port(port)
+
+        jumpstarter_pb2_grpc.add_ExporterServiceServicer_to_server(self, server)
+        router_pb2_grpc.add_RouterServiceServicer_to_server(self, server)
+
+        await server.start()
+        try:
+            yield
+        finally:
+            await server.stop(grace=None)
+
+    @asynccontextmanager
     async def serve_unix_async(self):
         with TemporarySocket() as path:
             async with self.serve_port_async(f"unix://{path}"):
                 yield path
+
+    @asynccontextmanager
+    async def serve_unix_with_hook_socket_async(self):
+        """Serve session on two Unix sockets: one for clients, one for hooks.
+
+        This creates separate sockets to prevent SSL frame corruption when
+        hook subprocess j commands access the session concurrently with
+        client LogStream connections.
+
+        Yields:
+            tuple[str, str]: (main_socket_path, hook_socket_path)
+        """
+        with TemporarySocket() as main_path:
+            with TemporarySocket() as hook_path:
+                async with self.serve_multi_port_async(f"unix://{main_path}", f"unix://{hook_path}"):
+                    yield main_path, hook_path
 
     @contextmanager
     def serve_unix(self):
@@ -145,7 +187,7 @@ class Session(
                     await event.wait()
 
     async def LogStream(self, request, context):
-        while True:
+        while not context.done():
             try:
                 yield self._logging_queue.popleft()
             except IndexError:
@@ -153,12 +195,16 @@ class Session(
                 await sleep(0.05)
 
     def update_status(self, status: int | ExporterStatus, message: str = ""):
-        """Update the current exporter status for the session."""
+        """Update the current exporter status for the session and signal status change."""
         if isinstance(status, int):
             self._current_status = ExporterStatus.from_proto(status)
         else:
             self._current_status = status
         self._status_message = message
+        # Signal status change for StreamStatus subscribers
+        self._status_update_event.set()
+        # Create a new event for the next status change
+        self._status_update_event = Event()
 
     def add_logger_source(self, logger_name: str, source: LogSource):
         """Add a log source mapping for a specific logger."""
@@ -180,13 +226,51 @@ class Session(
             message=self._status_message,
         )
 
+    async def StreamStatus(self, request, context):
+        """Stream status updates to the client.
+
+        Yields the current status immediately, then yields updates whenever
+        the status changes. This replaces polling GetStatus for real-time
+        status updates during hook execution.
+
+        The stream continues until the client disconnects or the context is done.
+        """
+        logger.info("StreamStatus() started")
+
+        # Send current status immediately
+        yield jumpstarter_pb2.StreamStatusResponse(
+            status=self._current_status.to_proto(),
+            message=self._status_message,
+        )
+
+        # Stream updates as they occur
+        while not context.done():
+            # Wait for status change event
+            current_event = self._status_update_event
+            await current_event.wait()
+
+            # Send the updated status
+            logger.debug("StreamStatus() sending update: %s", self._current_status)
+            yield jumpstarter_pb2.StreamStatusResponse(
+                status=self._current_status.to_proto(),
+                message=self._status_message,
+            )
+
     async def EndSession(self, request, context):
         """End the current session and trigger the afterLease hook.
 
-        This is called by the client when it's done with the session but wants
-        to keep the connection open to receive logs from the afterLease hook.
-        The method signals the end_session_requested event and waits for the
-        afterLease hook to complete before returning.
+        This is called by the client when it's done with the session. The method
+        signals the end_session_requested event and returns immediately, allowing
+        the client to keep receiving logs via LogStream while the afterLease hook
+        runs asynchronously.
+
+        The client should:
+        1. Keep LogStream running after calling EndSession
+        2. Use StreamStatus (or poll GetStatus) to detect when AVAILABLE status is reached
+        3. Then disconnect
+
+        This enables the session socket to stay open for controller monitoring and
+        supports exporter autonomy - the afterLease hook runs regardless of client state.
 
         Returns:
             EndSessionResponse with success status and optional message.
@@ -201,15 +285,15 @@ class Session(
             )
 
         # Signal that the client wants to end the session
+        # The afterLease hook will run asynchronously via _handle_end_session
         logger.debug("Setting end_session_requested event")
         self.lease_context.end_session_requested.set()
 
-        # Wait for the afterLease hook to complete
-        logger.debug("Waiting for after_lease_hook_done event")
-        await self.lease_context.after_lease_hook_done.wait()
-        logger.info("EndSession complete, afterLease hook finished")
+        # Return immediately - don't wait for afterLease hook
+        # The client should continue receiving logs and monitor status for AVAILABLE
+        logger.info("EndSession signaled, afterLease hook will run asynchronously")
 
         return jumpstarter_pb2.EndSessionResponse(
             success=True,
-            message="Session ended and afterLease hook completed",
+            message="Session end triggered, afterLease hook running asynchronously",
         )
