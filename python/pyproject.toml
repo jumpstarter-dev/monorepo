@@ -19,6 +19,7 @@ jumpstarter-driver-http-power = { workspace = true }
 jumpstarter-driver-gpiod = { workspace = true }
 jumpstarter-driver-ridesx = { workspace = true }
 jumpstarter-driver-network = { workspace = true }
+jumpstarter-driver-nanokvm = { workspace = true }
 jumpstarter-driver-opendal = { workspace = true }
 jumpstarter-driver-power = { workspace = true }
 jumpstarter-driver-probe-rs = { workspace = true }

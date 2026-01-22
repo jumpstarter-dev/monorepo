@@ -22,6 +22,7 @@ members = [
     "jumpstarter-driver-http",
     "jumpstarter-driver-http-power",
     "jumpstarter-driver-iscsi",
+    "jumpstarter-driver-nanokvm",
     "jumpstarter-driver-network",
     "jumpstarter-driver-opendal",
     "jumpstarter-driver-power",
@@ -1779,6 +1780,48 @@ dev = [
 ]
 
 [[package]]
+name = "jumpstarter-driver-nanokvm"
+source = { editable = "packages/jumpstarter-driver-nanokvm" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anyio" },
+    { name = "click" },
+    { name = "jumpstarter" },
+    { name = "jumpstarter-driver-composite" },
+    { name = "jumpstarter-driver-pyserial" },
+    { name = "nanokvm" },
+    { name = "pillow" },
+    { name = "pydantic" },
+    { name = "yarl" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp" },
+    { name = "anyio", specifier = ">=4.10.0" },
+    { name = "click" },
+    { name = "jumpstarter", editable = "packages/jumpstarter" },
+    { name = "jumpstarter-driver-composite", editable = "packages/jumpstarter-driver-composite" },
+    { name = "jumpstarter-driver-pyserial", editable = "packages/jumpstarter-driver-pyserial" },
+    { name = "nanokvm", git = "https://github.com/mangelajo/python-nanokvm.git?rev=dev" },
+    { name = "pillow" },
+    { name = "pydantic" },
+    { name = "yarl" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.3" },
+    { name = "pytest-cov", specifier = ">=6.0.0" },
+]
+
+[[package]]
 name = "jumpstarter-driver-network"
 source = { editable = "packages/jumpstarter-driver-network" }
 dependencies = [
@@ -2815,6 +2858,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/a5/9626ba4f73555b3735ad86247a8077d4603aa8628537687c839ab08bfe44/myst_parser-4.0.1.tar.gz", hash = "sha256:5cfea715e4f3574138aecbf7d54132296bfd72bb614d31168f48c477a830a7c4", size = 93985, upload-time = "2025-02-12T10:53:03.833Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5f/df/76d0321c3797b54b60fef9ec3bd6f4cfd124b9e422182156a1dd418722cf/myst_parser-4.0.1-py3-none-any.whl", hash = "sha256:9134e88959ec3b5780aedf8a99680ea242869d012e8821db3126d427edc9c95d", size = 84579, upload-time = "2025-02-12T10:53:02.078Z" },
+]
+
+[[package]]
+name = "nanokvm"
+version = "0.0.1"
+source = { git = "https://github.com/mangelajo/python-nanokvm.git?rev=dev#7cbf92f3ebe2d100a25d07b383ac177f745fa668" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "cryptography" },
+    { name = "paramiko" },
+    { name = "pillow" },
+    { name = "pydantic" },
+    { name = "yarl" },
 ]
 
 [[package]]
