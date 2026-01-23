@@ -600,22 +600,6 @@ _ExporterServiceGetStatusType = typing_extensions.TypeVar(
     ],
 )
 
-_ExporterServiceStreamStatusType = typing_extensions.TypeVar(
-    '_ExporterServiceStreamStatusType',
-    grpc.UnaryStreamMultiCallable[
-        jumpstarter.v1.jumpstarter_pb2.StreamStatusRequest,
-        jumpstarter.v1.jumpstarter_pb2.StreamStatusResponse,
-    ],
-    grpc.aio.UnaryStreamMultiCallable[
-        jumpstarter.v1.jumpstarter_pb2.StreamStatusRequest,
-        jumpstarter.v1.jumpstarter_pb2.StreamStatusResponse,
-    ],
-    default=grpc.UnaryStreamMultiCallable[
-        jumpstarter.v1.jumpstarter_pb2.StreamStatusRequest,
-        jumpstarter.v1.jumpstarter_pb2.StreamStatusResponse,
-    ],
-)
-
 _ExporterServiceEndSessionType = typing_extensions.TypeVar(
     '_ExporterServiceEndSessionType',
     grpc.UnaryUnaryMultiCallable[
@@ -632,7 +616,7 @@ _ExporterServiceEndSessionType = typing_extensions.TypeVar(
     ],
 )
 
-class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _ExporterServiceDriverCallType, _ExporterServiceStreamingDriverCallType, _ExporterServiceLogStreamType, _ExporterServiceResetType, _ExporterServiceGetStatusType, _ExporterServiceStreamStatusType, _ExporterServiceEndSessionType]):
+class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _ExporterServiceDriverCallType, _ExporterServiceStreamingDriverCallType, _ExporterServiceLogStreamType, _ExporterServiceResetType, _ExporterServiceGetStatusType, _ExporterServiceEndSessionType]):
     """A service a exporter can share locally to be used without a server
     Channel/Call credentials are used to authenticate the client, and routing to the right exporter
     """
@@ -662,10 +646,6 @@ class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _Exporte
         grpc.UnaryUnaryMultiCallable[
             jumpstarter.v1.jumpstarter_pb2.GetStatusRequest,
             jumpstarter.v1.jumpstarter_pb2.GetStatusResponse,
-        ],
-        grpc.UnaryStreamMultiCallable[
-            jumpstarter.v1.jumpstarter_pb2.StreamStatusRequest,
-            jumpstarter.v1.jumpstarter_pb2.StreamStatusResponse,
         ],
         grpc.UnaryUnaryMultiCallable[
             jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
@@ -699,10 +679,6 @@ class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _Exporte
             jumpstarter.v1.jumpstarter_pb2.GetStatusRequest,
             jumpstarter.v1.jumpstarter_pb2.GetStatusResponse,
         ],
-        grpc.aio.UnaryStreamMultiCallable[
-            jumpstarter.v1.jumpstarter_pb2.StreamStatusRequest,
-            jumpstarter.v1.jumpstarter_pb2.StreamStatusResponse,
-        ],
         grpc.aio.UnaryUnaryMultiCallable[
             jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
             jumpstarter.v1.jumpstarter_pb2.EndSessionResponse,
@@ -721,12 +697,6 @@ class ExporterServiceStub(typing.Generic[_ExporterServiceGetReportType, _Exporte
     Reset: _ExporterServiceResetType
 
     GetStatus: _ExporterServiceGetStatusType
-
-    StreamStatus: _ExporterServiceStreamStatusType
-    """Stream status updates to the client
-    Returns immediately with current status, then streams updates as they occur
-    Use this instead of polling GetStatus for real-time status updates
-    """
 
     EndSession: _ExporterServiceEndSessionType
     """End the current session, triggering the afterLease hook
@@ -758,10 +728,6 @@ ExporterServiceAsyncStub: typing_extensions.TypeAlias = ExporterServiceStub[
     grpc.aio.UnaryUnaryMultiCallable[
         jumpstarter.v1.jumpstarter_pb2.GetStatusRequest,
         jumpstarter.v1.jumpstarter_pb2.GetStatusResponse,
-    ],
-    grpc.aio.UnaryStreamMultiCallable[
-        jumpstarter.v1.jumpstarter_pb2.StreamStatusRequest,
-        jumpstarter.v1.jumpstarter_pb2.StreamStatusResponse,
     ],
     grpc.aio.UnaryUnaryMultiCallable[
         jumpstarter.v1.jumpstarter_pb2.EndSessionRequest,
@@ -816,17 +782,6 @@ class ExporterServiceServicer(metaclass=abc.ABCMeta):
         request: jumpstarter.v1.jumpstarter_pb2.GetStatusRequest,
         context: _ServicerContext,
     ) -> typing.Union[jumpstarter.v1.jumpstarter_pb2.GetStatusResponse, collections.abc.Awaitable[jumpstarter.v1.jumpstarter_pb2.GetStatusResponse]]: ...
-
-    @abc.abstractmethod
-    def StreamStatus(
-        self,
-        request: jumpstarter.v1.jumpstarter_pb2.StreamStatusRequest,
-        context: _ServicerContext,
-    ) -> typing.Union[collections.abc.Iterator[jumpstarter.v1.jumpstarter_pb2.StreamStatusResponse], collections.abc.AsyncIterator[jumpstarter.v1.jumpstarter_pb2.StreamStatusResponse]]:
-        """Stream status updates to the client
-        Returns immediately with current status, then streams updates as they occur
-        Use this instead of polling GetStatus for real-time status updates
-        """
 
     @abc.abstractmethod
     def EndSession(

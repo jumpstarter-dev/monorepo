@@ -93,18 +93,20 @@ async def _run_shell_with_lease_async(lease, exporter_logs, config, command, can
     """Run shell with lease context managers and wait for afterLease hook if logs enabled.
 
     When exporter_logs is enabled, this function will:
-    1. Connect and start log streaming
+    1. Connect and start log streaming with background status monitor
     2. Wait for beforeLease hook to complete (logs stream in real-time)
     3. Run the shell command
     4. After shell exits, call EndSession to trigger and wait for afterLease hook
     5. Logs stream to client during hook execution
     6. Release the lease after hook completes
 
+    Uses non-blocking polling via StatusMonitor for robust status tracking.
     If Ctrl+C is pressed during EndSession, the wait is skipped but the lease is still released.
     """
     from contextlib import ExitStack
 
     from jumpstarter.client.client import client_from_path
+    from jumpstarter.common import ExporterStatus
 
     async with lease.serve_unix_async() as path:
         async with lease.monitor_async():
@@ -113,48 +115,67 @@ async def _run_shell_with_lease_async(lease, exporter_logs, config, command, can
                 async with client_from_path(
                     path, lease.portal, stack, allow=lease.allow, unsafe=lease.unsafe
                 ) as client:
+                    # Start log streaming and status monitor together
+                    # The status monitor polls in the background for reliable status tracking
                     async with client.log_stream_async(show_all_logs=exporter_logs):
-                        # Wait for beforeLease hook to complete while logs are streaming
-                        # This allows hook output to be displayed in real-time
-                        # Use streaming for real-time status updates instead of polling
-                        logger.debug("Waiting for beforeLease hook to complete...")
-                        await client.wait_for_lease_ready_streaming()
-                        logger.debug("wait_for_lease_ready returned, launching shell...")
+                        async with client.status_monitor_async(poll_interval=0.3) as monitor:
+                            # Wait for beforeLease hook to complete while logs are streaming
+                            # This allows hook output to be displayed in real-time
+                            # Uses non-blocking polling instead of streaming for robustness
+                            logger.debug("Waiting for beforeLease hook to complete...")
 
-                        # Run the shell command
-                        exit_code = await anyio.to_thread.run_sync(
-                            _run_shell_only, lease, config, command, path
-                        )
+                            # Wait for LEASE_READY or hook failure using background monitor
+                            result = await monitor.wait_for_any_of(
+                                [ExporterStatus.LEASE_READY, ExporterStatus.BEFORE_LEASE_HOOK_FAILED],
+                                timeout=300.0
+                            )
 
-                        # Shell has exited. Call EndSession to trigger afterLease hook
-                        # while keeping log stream open to receive hook logs.
-                        # EndSession returns immediately, so we need to wait for
-                        # the hook to complete by monitoring the status.
-                        if lease.name and not cancel_scope.cancel_called:
-                            logger.info("Running afterLease hook (Ctrl+C to skip)...")
-                            try:
-                                # EndSession triggers the afterLease hook asynchronously
-                                success = await client.end_session_async()
-                                if success:
-                                    # Wait for hook to complete while log stream stays open
-                                    # This allows afterLease logs to be displayed in real-time
-                                    from jumpstarter.common import ExporterStatus
-                                    with anyio.move_on_after(300) as timeout_scope:  # 5 minute timeout
-                                        completed = await client.wait_for_hook_status_streaming(
-                                            ExporterStatus.AVAILABLE, timeout=300.0
-                                        )
-                                        if completed:
-                                            logger.info("afterLease hook completed")
-                                        else:
-                                            logger.debug("Hook completion not confirmed")
-                                    if timeout_scope.cancelled_caught:
-                                        logger.warning("Timeout waiting for afterLease hook to complete")
-                                else:
-                                    logger.debug("EndSession not implemented, skipping hook wait")
-                            except Exception as e:
-                                logger.warning("Error during afterLease hook: %s", e)
+                            if result == ExporterStatus.BEFORE_LEASE_HOOK_FAILED:
+                                logger.warning("beforeLease hook failed")
+                            elif result is None:
+                                logger.warning("Timeout waiting for beforeLease hook")
 
-                        return exit_code
+                            logger.debug("wait_for_lease_ready returned, launching shell...")
+
+                            # Run the shell command
+                            exit_code = await anyio.to_thread.run_sync(
+                                _run_shell_only, lease, config, command, path
+                            )
+
+                            # Shell has exited. Call EndSession to trigger afterLease hook
+                            # while keeping log stream and status monitor open.
+                            # EndSession returns immediately, so we use the status monitor
+                            # to wait for hook completion.
+                            if lease.name and not cancel_scope.cancel_called:
+                                logger.info("Running afterLease hook (Ctrl+C to skip)...")
+                                try:
+                                    # EndSession triggers the afterLease hook asynchronously
+                                    success = await client.end_session_async()
+                                    if success:
+                                        # Wait for hook to complete using background monitor
+                                        # This allows afterLease logs to be displayed in real-time
+                                        with anyio.move_on_after(300) as timeout_scope:  # 5 minute timeout
+                                            result = await monitor.wait_for_any_of(
+                                                [ExporterStatus.AVAILABLE, ExporterStatus.AFTER_LEASE_HOOK_FAILED],
+                                                timeout=300.0
+                                            )
+                                            if result == ExporterStatus.AVAILABLE:
+                                                logger.info("afterLease hook completed")
+                                            elif result == ExporterStatus.AFTER_LEASE_HOOK_FAILED:
+                                                logger.warning("afterLease hook failed")
+                                            elif monitor.connection_lost:
+                                                # Connection lost - exporter closed, hook likely completed
+                                                logger.info("Exporter connection closed (hook completed)")
+                                            else:
+                                                logger.debug("Hook completion not confirmed")
+                                        if timeout_scope.cancelled_caught:
+                                            logger.warning("Timeout waiting for afterLease hook to complete")
+                                    else:
+                                        logger.debug("EndSession not implemented, skipping hook wait")
+                                except Exception as e:
+                                    logger.warning("Error during afterLease hook: %s", e)
+
+                            return exit_code
 
 
 async def _shell_with_signal_handling(

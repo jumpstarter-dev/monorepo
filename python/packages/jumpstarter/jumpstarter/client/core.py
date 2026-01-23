@@ -78,6 +78,8 @@ class AsyncDriverClient(
             super().__post_init__()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(self.log_level)
+        # Initialize status monitor (not a dataclass field to avoid Pydantic type resolution issues)
+        self._status_monitor = None
 
         # add default handler
         if not self.logger.handlers:
@@ -122,57 +124,6 @@ class AsyncDriverClient(
         if status not in ALLOWED_STATUSES:
             raise ExporterNotReady(f"Exporter status is {status}")
 
-    async def wait_for_lease_ready_streaming(self, timeout: float = 300.0) -> None:
-        """Wait for exporter to report LEASE_READY status using streaming.
-
-        Uses StreamStatus RPC for real-time status updates instead of polling.
-        This is more efficient and provides immediate notification of status changes.
-
-        Args:
-            timeout: Maximum time to wait in seconds (default: 5 minutes)
-        """
-        import anyio
-
-        self.logger.debug("Waiting for exporter to be ready (streaming)...")
-        seen_before_lease_hook = False
-
-        try:
-            with anyio.move_on_after(timeout):
-                async for response in self.stub.StreamStatus(jumpstarter_pb2.StreamStatusRequest()):
-                    status = ExporterStatus.from_proto(response.status)
-                    self.logger.debug("StreamStatus received: %s", status)
-
-                    if status == ExporterStatus.LEASE_READY:
-                        self.logger.info("Exporter ready, starting shell...")
-                        return
-                    elif status == ExporterStatus.BEFORE_LEASE_HOOK_FAILED:
-                        self.logger.warning("beforeLease hook failed")
-                        return
-                    elif status == ExporterStatus.AFTER_LEASE_HOOK:
-                        # Lease ended before becoming ready
-                        raise DriverError("Lease ended before becoming ready")
-                    elif status == ExporterStatus.BEFORE_LEASE_HOOK:
-                        seen_before_lease_hook = True
-                        self.logger.debug("beforeLease hook is running...")
-                    elif status == ExporterStatus.AVAILABLE:
-                        if seen_before_lease_hook:
-                            # Lease ended - AVAILABLE after BEFORE_LEASE_HOOK indicates lease released
-                            raise DriverError("Lease ended before becoming ready")
-                        else:
-                            # Initial AVAILABLE state - waiting for lease assignment
-                            self.logger.debug("Exporter status: AVAILABLE (waiting for lease assignment)")
-                    else:
-                        self.logger.debug("Exporter status: %s (waiting...)", status)
-
-            self.logger.warning("Timeout waiting for beforeLease hook to complete")
-        except AioRpcError as e:
-            if e.code() == StatusCode.UNIMPLEMENTED:
-                # StreamStatus not implemented, fall back to polling
-                self.logger.debug("StreamStatus not implemented, falling back to polling")
-                await self.wait_for_lease_ready(timeout)
-            else:
-                raise DriverError(f"Error streaming status: {e.details()}") from e
-
     async def wait_for_lease_ready(self, timeout: float = 300.0) -> None:
         """Wait for exporter to report LEASE_READY status.
 
@@ -180,7 +131,7 @@ class AsyncDriverClient(
         Should be called after log streaming is started so hook output
         can be displayed in real-time.
 
-        Prefer wait_for_lease_ready_streaming() for real-time status updates.
+        Prefer using StatusMonitor.wait_for_any_of() for non-blocking status tracking.
 
         Args:
             timeout: Maximum time to wait in seconds (default: 5 minutes)
@@ -266,60 +217,13 @@ class AsyncDriverClient(
                 return True
             raise DriverError(f"Failed to end session: {e.details()}") from e
 
-    async def wait_for_hook_status_streaming(self, target_status: "ExporterStatus", timeout: float = 60.0) -> bool:
-        """Wait for exporter to reach a target status using streaming.
-
-        Uses StreamStatus RPC for real-time status updates instead of polling.
-        Used after end_session_async() to wait for afterLease hook completion
-        while keeping the log stream open to receive hook logs.
-
-        Args:
-            target_status: The status to wait for (typically AVAILABLE)
-            timeout: Maximum time to wait in seconds (default: 60 seconds)
-
-        Returns:
-            True if target status was reached, False if timed out or connection error
-        """
-        import anyio
-
-        self.logger.debug("Waiting for hook completion via StreamStatus (target: %s)", target_status)
-
-        try:
-            with anyio.move_on_after(timeout):
-                async for response in self.stub.StreamStatus(jumpstarter_pb2.StreamStatusRequest()):
-                    status = ExporterStatus.from_proto(response.status)
-                    self.logger.debug("StreamStatus received: %s", status)
-
-                    if status == target_status:
-                        self.logger.debug("Exporter reached target status: %s", status)
-                        return True
-
-                    # Hook failed states also indicate completion
-                    if status == ExporterStatus.AFTER_LEASE_HOOK_FAILED:
-                        self.logger.warning("afterLease hook failed")
-                        return True
-
-                    # Still running hook - keep waiting
-                    self.logger.debug("Waiting for hook completion, current status: %s", status)
-
-            self.logger.warning("Timeout waiting for hook to complete (target: %s)", target_status)
-            return False
-        except AioRpcError as e:
-            if e.code() == StatusCode.UNIMPLEMENTED:
-                # StreamStatus not implemented, fall back to polling
-                self.logger.debug("StreamStatus not implemented, falling back to polling")
-                return await self.wait_for_hook_status(target_status, timeout)
-            # Connection error - the hook may still be running but we can't confirm
-            self.logger.debug("Connection error while waiting for hook: %s", e.code())
-            return False
-
     async def wait_for_hook_status(self, target_status: "ExporterStatus", timeout: float = 60.0) -> bool:
         """Wait for exporter to reach a target status using polling.
 
         Used after end_session_async() to wait for afterLease hook completion
         while keeping the log stream open to receive hook logs.
 
-        Prefer wait_for_hook_status_streaming() for real-time status updates.
+        Prefer using StatusMonitor.wait_for_any_of() for non-blocking status tracking.
 
         Args:
             target_status: The status to wait for (typically AVAILABLE)
@@ -365,11 +269,89 @@ class AsyncDriverClient(
         self.logger.warning("Timeout waiting for hook to complete (target: %s)", target_status)
         return False
 
+    @asynccontextmanager
+    async def status_monitor_async(self, poll_interval: float = 0.3):
+        """Start background status monitoring as a context manager.
+
+        Creates a StatusMonitor that polls GetStatus in a background task,
+        enabling non-blocking status checks and event-driven notifications.
+
+        Args:
+            poll_interval: Seconds between status polls (default: 0.3)
+
+        Yields:
+            StatusMonitor instance for non-blocking status tracking
+
+        Example:
+            async with client.status_monitor_async() as monitor:
+                # Wait for beforeLease hook (non-blocking to other tasks)
+                await monitor.wait_for_status(ExporterStatus.LEASE_READY)
+
+                # Check current status at any time
+                current = monitor.current_status
+        """
+        from jumpstarter.client.status_monitor import StatusMonitor
+
+        monitor = StatusMonitor(self.stub, poll_interval)
+        self._status_monitor = monitor
+
+        async with create_task_group() as tg:
+            await monitor.start(tg)
+            try:
+                yield monitor
+            finally:
+                await monitor.stop()
+                self._status_monitor = None
+
+    @property
+    def status(self) -> ExporterStatus | None:
+        """Get current cached status (non-blocking).
+
+        Returns None if status monitor not started.
+        """
+        return self._status_monitor.current_status if self._status_monitor else None
+
+    async def wait_for_lease_ready_monitored(self, timeout: float = 300.0) -> None:
+        """Wait for LEASE_READY status using background monitor.
+
+        Non-blocking to other async tasks. Requires status_monitor_async context.
+
+        Args:
+            timeout: Maximum time to wait in seconds (default: 5 minutes)
+        """
+        if not self._status_monitor:
+            raise RuntimeError("Status monitor not started. Use status_monitor_async() context.")
+
+        reached = await self._status_monitor.wait_for_status(
+            ExporterStatus.LEASE_READY,
+            timeout=timeout
+        )
+        if not reached:
+            raise DriverError("Timeout waiting for LEASE_READY status")
+
+    async def wait_for_hook_complete_monitored(self, timeout: float = 60.0) -> bool:
+        """Wait for afterLease hook to complete (AVAILABLE status) using monitor.
+
+        Non-blocking to other async tasks. Requires status_monitor_async context.
+
+        Args:
+            timeout: Maximum time to wait in seconds (default: 60 seconds)
+
+        Returns:
+            True if completed, False if timed out
+        """
+        if not self._status_monitor:
+            return True  # No monitor, assume complete
+
+        # Wait for AVAILABLE or hook failure status
+        result = await self._status_monitor.wait_for_any_of(
+            [ExporterStatus.AVAILABLE, ExporterStatus.AFTER_LEASE_HOOK_FAILED],
+            timeout=timeout
+        )
+        return result is not None
+
     async def call_async(self, method, *args):
         """Make DriverCall by method name and arguments"""
-
-        # Check exporter status before making the call
-        await self.check_exporter_status()
 
         request = jumpstarter_pb2.DriverCallRequest(
             uuid=str(self.uuid),
@@ -381,6 +363,8 @@ class AsyncDriverClient(
             response = await self.stub.DriverCall(request)
         except AioRpcError as e:
             match e.code():
+                case StatusCode.FAILED_PRECONDITION:
+                    raise ExporterNotReady(e.details()) from None
                 case StatusCode.NOT_FOUND:
                     raise DriverMethodNotImplemented(e.details()) from None
                 case StatusCode.UNIMPLEMENTED:
@@ -397,9 +381,6 @@ class AsyncDriverClient(
     async def streamingcall_async(self, method, *args):
         """Make StreamingDriverCall by method name and arguments"""
 
-        # Check exporter status before making the call
-        await self.check_exporter_status()
-
         request = jumpstarter_pb2.StreamingDriverCallRequest(
             uuid=str(self.uuid),
             method=method,
@@ -411,6 +392,8 @@ class AsyncDriverClient(
                 yield decode_value(response.result)
         except AioRpcError as e:
             match e.code():
+                case StatusCode.FAILED_PRECONDITION:
+                    raise ExporterNotReady(e.details()) from None
                 case StatusCode.UNIMPLEMENTED:
                     raise DriverMethodNotImplemented(e.details()) from None
                 case StatusCode.INVALID_ARGUMENT:
@@ -455,45 +438,76 @@ class AsyncDriverClient(
 
     @asynccontextmanager
     async def log_stream_async(self, show_all_logs: bool = True):
+        import anyio
+
         async def log_stream():
             from jumpstarter.common import LogSource
 
-            try:
-                async for response in self.stub.LogStream(empty_pb2.Empty()):
-                    # Determine log source
-                    if response.HasField("source"):
-                        source = LogSource(response.source)
-                        is_hook = source in (LogSource.BEFORE_LEASE_HOOK, LogSource.AFTER_LEASE_HOOK)
+            reconnect_delay = 0.1  # Start with 100ms delay
+            max_reconnect_delay = 2.0  # Max 2 seconds between reconnects
+            max_reconnects = 10  # Give up after this many reconnects
+
+            reconnect_count = 0
+            while reconnect_count < max_reconnects:
+                try:
+                    async for response in self.stub.LogStream(empty_pb2.Empty()):
+                        # Reset reconnect count on successful message
+                        reconnect_count = 0
+                        reconnect_delay = 0.1
+
+                        # Determine log source
+                        if response.HasField("source"):
+                            source = LogSource(response.source)
+                            is_hook = source in (LogSource.BEFORE_LEASE_HOOK, LogSource.AFTER_LEASE_HOOK)
+                        else:
+                            source = LogSource.SYSTEM
+                            is_hook = False
+
+                        # Filter: always show hooks, only show system logs if enabled
+                        if is_hook or show_all_logs:
+                            # Get severity level
+                            severity = response.severity if response.severity else "INFO"
+                            log_level = getattr(logging, severity, logging.INFO)
+
+                            # Route to appropriate logger based on source
+                            if source == LogSource.BEFORE_LEASE_HOOK:
+                                logger_name = "exporter:beforeLease"
+                            elif source == LogSource.AFTER_LEASE_HOOK:
+                                logger_name = "exporter:afterLease"
+                            elif source == LogSource.DRIVER:
+                                logger_name = "exporter:driver"
+                            else:  # SYSTEM
+                                logger_name = "exporter:system"
+
+                            # Log through logger for RichHandler formatting
+                            source_logger = logging.getLogger(logger_name)
+                            source_logger.log(log_level, response.message)
+
+                    # Stream ended normally (server closed it)
+                    self.logger.debug("Log stream ended normally, attempting reconnect...")
+
+                except AioRpcError as e:
+                    # Connection disrupted - try to reconnect for afterLease logs
+                    if e.code() == StatusCode.UNAVAILABLE:
+                        self.logger.debug("Log stream unavailable, reconnecting in %.1fs...", reconnect_delay)
+                    elif e.code() == StatusCode.CANCELLED:
+                        # Stream was cancelled, likely shutting down
+                        self.logger.debug("Log stream cancelled")
+                        break
                     else:
-                        source = LogSource.SYSTEM
-                        is_hook = False
+                        self.logger.debug("Log stream error: %s", e.code())
 
-                    # Filter: always show hooks, only show system logs if enabled
-                    if is_hook or show_all_logs:
-                        # Get severity level
-                        severity = response.severity if response.severity else "INFO"
-                        log_level = getattr(logging, severity, logging.INFO)
+                except Exception as e:
+                    # Other errors - log and try to reconnect
+                    self.logger.debug("Log stream error: %s", e)
 
-                        # Route to appropriate logger based on source
-                        if source == LogSource.BEFORE_LEASE_HOOK:
-                            logger_name = "exporter:beforeLease"
-                        elif source == LogSource.AFTER_LEASE_HOOK:
-                            logger_name = "exporter:afterLease"
-                        elif source == LogSource.DRIVER:
-                            logger_name = "exporter:driver"
-                        else:  # SYSTEM
-                            logger_name = "exporter:system"
+                # Wait before reconnecting (with exponential backoff)
+                reconnect_count += 1
+                await anyio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
 
-                        # Log through logger for RichHandler formatting
-                        source_logger = logging.getLogger(logger_name)
-                        source_logger.log(log_level, response.message)
-            except AioRpcError as e:
-                # Connection disrupted - exit gracefully without raising
-                # This can happen when the session ends or network issues occur
-                self.logger.debug("Log stream ended: %s", e.code())
-            except Exception as e:
-                # Other errors - log and exit gracefully
-                self.logger.debug("Log stream error: %s", e)
+            if reconnect_count >= max_reconnects:
+                self.logger.debug("Log stream: max reconnects reached, giving up")
 
         async with create_task_group() as tg:
             tg.start_soon(log_stream)

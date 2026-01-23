@@ -71,6 +71,12 @@ class HookExecutor:
         # Use dedicated hook socket to prevent SSL corruption
         # Falls back to main socket if hook socket not available (backward compatibility)
         socket_path = lease_scope.hook_socket_path or lease_scope.socket_path
+        if lease_scope.hook_socket_path:
+            logger.info("Using dedicated hook socket: %s (main socket: %s)",
+                       lease_scope.hook_socket_path, lease_scope.socket_path)
+        else:
+            logger.warning("No dedicated hook socket available, using main socket: %s "
+                          "(may cause SSL issues if client is connected)", socket_path)
         hook_env.update(
             {
                 JUMPSTARTER_HOST: str(socket_path),
@@ -178,11 +184,17 @@ class HookExecutor:
         timed_out = False
 
         # Route hook output logs to the client via the session's log stream
+        logger.info("Entering log source context for %s", log_source)
         with logging_session.context_log_source(__name__, log_source):
             # Create a PTY pair - this forces line buffering in the subprocess
             logger.info("Starting hook subprocess...")
-            master_fd, slave_fd = pty.openpty()
-            logger.debug("PTY created: master_fd=%d, slave_fd=%d", master_fd, slave_fd)
+            logger.info("Creating PTY pair...")
+            try:
+                master_fd, slave_fd = pty.openpty()
+            except Exception as e:
+                logger.error("Failed to create PTY: %s", e, exc_info=True)
+                raise
+            logger.info("PTY created: master_fd=%d, slave_fd=%d", master_fd, slave_fd)
 
             # Track which fds are still open (use list for mutability in nested scope)
             fds_open = {"master": True, "slave": True}
@@ -191,16 +203,21 @@ class HookExecutor:
             try:
                 # Use subprocess.Popen with the PTY slave as stdin/stdout/stderr
                 # This avoids the issues with os.fork() in async contexts
-                logger.debug("Spawning subprocess with command: %s", command[:100])
-                process = subprocess.Popen(
-                    ["/bin/sh", "-c", command],
-                    stdin=slave_fd,
-                    stdout=slave_fd,
-                    stderr=slave_fd,
-                    env=hook_env,
-                    start_new_session=True,  # Equivalent to os.setsid()
-                )
-                logger.debug("Subprocess spawned with PID %d", process.pid)
+                logger.info("Spawning subprocess with command: %s", command[:100])
+                try:
+                    process = subprocess.Popen(
+                        ["/bin/sh", "-c", command],
+                        stdin=slave_fd,
+                        stdout=slave_fd,
+                        stderr=slave_fd,
+                        env=hook_env,
+                        start_new_session=True,  # Equivalent to os.setsid()
+                        close_fds=True,  # Close inherited fds to prevent interference with parent's gRPC connections
+                    )
+                except Exception as e:
+                    logger.error("Failed to spawn subprocess: %s", e, exc_info=True)
+                    raise
+                logger.info("Subprocess spawned with PID %d", process.pid)
                 # Close slave in parent - subprocess has it now
                 os.close(slave_fd)
                 fds_open["slave"] = False
@@ -222,50 +239,62 @@ class HookExecutor:
                     last_heartbeat = 0
                     import time
                     start_time = time.monotonic()
-                    while fds_open["master"]:
-                        try:
-                            # Wait for fd to be readable with timeout
-                            with anyio.move_on_after(0.1):
-                                await anyio.wait_readable(master_fd)
-                            read_count += 1
-                            # Log heartbeat every 2 seconds
-                            elapsed = time.monotonic() - start_time
-                            if elapsed - last_heartbeat >= 2.0:
-                                logger.debug("read_pty_output: heartbeat at %.1fs, iterations=%d", elapsed, read_count)
-                                last_heartbeat = elapsed
-
-                            # Read available data (non-blocking)
+                    try:
+                        while fds_open["master"]:
                             try:
-                                chunk = os.read(master_fd, 4096)
-                                if not chunk:
-                                    # EOF
+                                # Wait for fd to be readable with timeout
+                                with anyio.move_on_after(0.1):
+                                    await anyio.wait_readable(master_fd)
+
+                                # Check stop flag immediately after timeout
+                                # (main task may have signaled us to stop)
+                                if not fds_open["master"]:
+                                    logger.debug("read_pty_output: stop flag set, exiting")
                                     break
-                                buffer += chunk
-                            except BlockingIOError:
-                                # No data available right now, continue loop
-                                continue
-                            except OSError:
-                                # PTY closed or error
+
+                                read_count += 1
+                                # Log heartbeat every 2 seconds
+                                elapsed = time.monotonic() - start_time
+                                if elapsed - last_heartbeat >= 2.0:
+                                    logger.debug("read_pty_output: heartbeat at %.1fs, iterations=%d", elapsed, read_count)
+                                    last_heartbeat = elapsed
+
+                                # Read available data (non-blocking)
+                                try:
+                                    chunk = os.read(master_fd, 4096)
+                                    if not chunk:
+                                        # EOF
+                                        logger.debug("read_pty_output: EOF received")
+                                        break
+                                    buffer += chunk
+                                except BlockingIOError:
+                                    # No data available right now, continue loop
+                                    continue
+                                except OSError as e:
+                                    # PTY closed or error
+                                    logger.debug("read_pty_output: OSError on read: %s", e)
+                                    break
+
+                                # Process complete lines
+                                while b"\n" in buffer:
+                                    line, buffer = buffer.split(b"\n", 1)
+                                    line_decoded = line.decode(errors="replace").rstrip()
+                                    if line_decoded:
+                                        output_lines.append(line_decoded)
+                                        logger.info("%s", line_decoded)
+
+                            except OSError as e:
+                                # PTY closed or read error
+                                logger.debug("read_pty_output: OSError in loop: %s", e)
                                 break
-
-                            # Process complete lines
-                            while b"\n" in buffer:
-                                line, buffer = buffer.split(b"\n", 1)
-                                line_decoded = line.decode(errors="replace").rstrip()
-                                if line_decoded:
-                                    output_lines.append(line_decoded)
-                                    logger.info("%s", line_decoded)
-
-                        except OSError:
-                            # PTY closed or read error
-                            break
-
-                    # Handle any remaining data without newline
-                    if buffer:
-                        line_decoded = buffer.decode(errors="replace").rstrip()
-                        if line_decoded:
-                            output_lines.append(line_decoded)
-                            logger.info("%s", line_decoded)
+                    finally:
+                        logger.debug("read_pty_output: exiting, processed %d iterations", read_count)
+                        # Handle any remaining data without newline
+                        if buffer:
+                            line_decoded = buffer.decode(errors="replace").rstrip()
+                            if line_decoded:
+                                output_lines.append(line_decoded)
+                                logger.info("%s", line_decoded)
 
                 async def wait_for_process() -> int:
                     """Wait for the subprocess to complete."""
@@ -279,7 +308,7 @@ class HookExecutor:
 
                 # Use move_on_after for timeout
                 returncode: int | None = None
-                logger.debug("Starting task group for PTY reading and process waiting (timeout=%d)", timeout)
+                logger.info("Starting PTY output reader and process waiter (timeout=%d)", timeout)
 
                 # Yield to event loop to ensure other tasks can progress
                 # This helps prevent race conditions in task scheduling
@@ -288,18 +317,20 @@ class HookExecutor:
                 with anyio.move_on_after(timeout) as cancel_scope:
                     # Run output reading and process waiting concurrently
                     async with anyio.create_task_group() as tg:
-                        logger.debug("Task group created, starting read_pty_output task")
+                        logger.info("Task group created, starting tasks...")
                         tg.start_soon(read_pty_output)
-                        logger.debug("Calling wait_for_process...")
+                        logger.info("Waiting for subprocess to complete...")
                         returncode = await wait_for_process()
-                        logger.debug("wait_for_process returned: %s", returncode)
+                        logger.info("Subprocess completed with code: %s", returncode)
                         # Give a brief moment for any final output to be read
                         await anyio.sleep(0.2)
                         # Signal the read task to stop by marking fd as closed
-                        # The read task checks fds_open["master"] in its loop
+                        # The read task checks this flag after each 0.1s timeout
+                        # and also receives EOF when the subprocess exits
                         fds_open["master"] = False
-                        # The task group will wait for read_pty_output to complete
-                        # after it sees fds_open["master"] is False on next iteration
+                        logger.debug("Stop flag set, waiting for read task to exit")
+                        # Don't cancel - let the task exit naturally via EOF or flag check
+                        # Cancellation can cause unexpected side effects on gRPC connections
 
                 if cancel_scope.cancelled_caught:
                     timed_out = True
@@ -557,6 +588,10 @@ class HookExecutor:
             # Unexpected errors don't trigger shutdown - exporter remains available
 
         finally:
+            # Brief delay to allow client's status monitor to poll and see AVAILABLE
+            # before we request lease release (which closes the session)
+            await anyio.sleep(1.0)
+
             # Request lease release from controller after hook completes (success or failure)
             # This ensures the lease is always released even if the client disconnects
             if request_lease_release:

@@ -209,7 +209,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         stream_factory: Callable[[jumpstarter_pb2_grpc.ControllerServiceStub], AsyncGenerator],
         send_tx,
         retries: int = 5,
-        backoff: float = 3.0,
+        backoff: float = 1.0,  # Reduced from 3.0 for faster recovery from transient errors
     ):
         """Generic retry wrapper for gRPC streaming calls.
 
@@ -231,14 +231,18 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             except Exception as e:
                 if retries_left > 0:
                     retries_left -= 1
+                    # Check for common transient errors that warrant faster retry
+                    error_str = str(e)
+                    is_transient = "Stream removed" in error_str or "UNAVAILABLE" in error_str
+                    retry_delay = 0.5 if is_transient else backoff
                     logger.info(
                         "%s stream interrupted, restarting in %ss, %s retries left: %s",
                         stream_name,
-                        backoff,
+                        retry_delay,
                         retries_left,
                         e,
                     )
-                    await sleep(backoff)
+                    await sleep(retry_delay)
                 else:
                     raise
             else:
@@ -417,21 +421,25 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         Args:
             lease_context: The LeaseContext for the current lease.
         """
+        logger.debug("_handle_end_session task started, waiting for end_session_requested event")
         # Wait for client to signal end of session
         await lease_context.end_session_requested.wait()
+        logger.debug("end_session_requested event received")
         logger.info("EndSession requested, running afterLease hook")
 
         try:
             # Check if hook already started (via lease state transition)
             if lease_context.after_lease_hook_started.is_set():
-                logger.debug("afterLease hook already started via lease state transition, waiting for completion")
+                logger.debug("afterLease hook already started, waiting for completion")
                 await lease_context.after_lease_hook_done.wait()
                 return
 
             # Mark hook as started to prevent duplicate execution
+            logger.debug("Marking afterLease hook as started")
             lease_context.after_lease_hook_started.set()
 
             if self.hook_executor and lease_context.has_client():
+                logger.debug("Calling run_after_lease_hook")
                 with CancelScope(shield=True):
                     await self.hook_executor.run_after_lease_hook(
                         lease_context,
@@ -485,6 +493,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         Yields:
             tuple[Session, str, str]: A tuple of (session, main_socket_path, hook_socket_path)
         """
+        logger.info("Creating new session for lease")
         with Session(
             uuid=self.uuid,
             labels=self.labels,
@@ -492,6 +501,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         ) as session:
             # Create dual Unix sockets - one for clients, one for hooks
             async with session.serve_unix_with_hook_socket_async() as (main_path, hook_path):
+                logger.info("Session serving on main=%s, hook=%s", main_path, hook_path)
                 # Create a gRPC channel to the controller via the main socket
                 async with grpc.aio.secure_channel(
                     f"unix://{main_path}", grpc.local_channel_credentials(grpc.LocalConnectionType.UDS)
@@ -500,6 +510,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                     await self._register_with_controller(channel)
                 # Yield session and both socket paths
                 yield session, main_path, hook_path
+        logger.info("Session closed")
 
     async def handle_lease(self, lease_name: str, tg: TaskGroup, lease_scope: LeaseContext) -> None:
         """Handle all incoming client connections for a lease.
@@ -664,6 +675,10 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                         await self._lease_context.after_lease_hook_done.wait()
                         logger.info("afterLease hook completed, stopping exporter")
 
+                        # Brief yield to let pending gRPC callbacks complete before cancellation
+                        # This prevents InvalidStateError on Future cleanup during stop()
+                        await sleep(0.1)
+
                     # Clear lease scope for next lease
                     self._lease_context = None
                     self.stop()
@@ -673,9 +688,11 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                 previous_leased = self._previous_leased
                 current_leased = status.leased
 
-                # Check if this is a new lease assignment (first time or lease name changed)
-                if not self._started and status.lease_name != "":
+                # Check if this is a new lease assignment (no active lease context and we have a lease name)
+                # This handles both first lease and subsequent leases after the previous one ended
+                if self._lease_context is None and status.lease_name != "":
                     self._started = True
+                    logger.info("Starting new lease: %s", status.lease_name)
                     # Create lease scope and start handling the lease
                     # The session will be created inside handle_lease and stay open for the lease duration
                     lease_scope = LeaseContext(
@@ -725,6 +742,10 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
                     # Clear lease scope for next lease
                     self._lease_context = None
+                    # Brief delay to ensure session is fully closed before next lease
+                    # This prevents SSL corruption from overlapping connections
+                    await sleep(0.2)
+                    logger.debug("Ready for next lease")
 
                     if self._stop_requested:
                         self.stop(should_unregister=True)
