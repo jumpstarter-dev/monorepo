@@ -77,18 +77,6 @@ async def _monitor_token_expiry(config, cancel_scope) -> None:
             return
 
 
-def _run_shell_with_lease(lease, exporter_logs, config, command):
-    """Run shell with lease context managers (no afterLease hook waiting)."""
-    with lease.serve_unix() as path:
-        with lease.monitor():
-            if exporter_logs:
-                with lease.connect() as client:
-                    with client.log_stream():
-                        return _run_shell_only(lease, config, command, path)
-            else:
-                return _run_shell_only(lease, config, command, path)
-
-
 async def _run_shell_with_lease_async(lease, exporter_logs, config, command, cancel_scope):
     """Run shell with lease context managers and wait for afterLease hook if logs enabled.
 
@@ -131,11 +119,13 @@ async def _run_shell_with_lease_async(lease, exporter_logs, config, command, can
                             )
 
                             if result == ExporterStatus.BEFORE_LEASE_HOOK_FAILED:
-                                logger.warning("beforeLease hook failed")
+                                logger.error("beforeLease hook failed, not launching shell")
+                                return 1
                             elif result is None:
-                                logger.warning("Timeout waiting for beforeLease hook")
+                                logger.error("Timeout waiting for beforeLease hook, not launching shell")
+                                return 1
 
-                            logger.debug("wait_for_lease_ready returned, launching shell...")
+                            logger.debug("Exporter ready (status: %s), launching shell...", result)
 
                             # Run the shell command
                             exit_code = await anyio.to_thread.run_sync(

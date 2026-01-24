@@ -9,7 +9,8 @@ import logging
 from collections.abc import Awaitable, Callable
 
 import anyio
-from anyio import Event
+from anyio import Event, create_task_group
+from contextlib import AsyncExitStack
 from grpc import StatusCode
 from grpc.aio import AioRpcError
 from jumpstarter_protocol import jumpstarter_pb2
@@ -29,7 +30,7 @@ class StatusMonitor:
     4. Allows non-blocking status checks at any time
 
     Usage:
-        async with client.start_status_monitor() as monitor:
+        async with client.status_monitor_async() as monitor:
             # Non-blocking status access
             current = monitor.current_status
 
@@ -69,6 +70,9 @@ class StatusMonitor:
         self._running = False
         self._stop_event: Event = Event()
         self._poll_task_started: Event = Event()
+
+        # Context manager support
+        self._exit_stack: AsyncExitStack | None = None
 
         # Slow polling mode - used when idle (e.g., shell running)
         self._slow_poll_interval: float = 5.0
@@ -396,8 +400,15 @@ class StatusMonitor:
 
     async def __aenter__(self):
         """Context manager entry - starts monitoring in a new task group."""
+        self._exit_stack = AsyncExitStack()
+        await self._exit_stack.__aenter__()
+        tg = await self._exit_stack.enter_async_context(create_task_group())
+        await self.start(tg)
         return self
 
-    async def __aexit__(self, *args):
-        """Context manager exit - stops monitoring."""
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - stops monitoring and cleans up task group."""
         await self.stop()
+        if self._exit_stack:
+            await self._exit_stack.__aexit__(exc_type, exc_val, exc_tb)
+            self._exit_stack = None

@@ -199,9 +199,20 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         """
         return self._exit_code
 
-    async def _get_controller_stub(self) -> jumpstarter_pb2_grpc.ControllerServiceStub:
-        """Create and return a controller service stub."""
-        return jumpstarter_pb2_grpc.ControllerServiceStub(await self.channel_factory())
+    @asynccontextmanager
+    async def _controller_stub(self) -> AsyncGenerator[jumpstarter_pb2_grpc.ControllerServiceStub, None]:
+        """Create a controller service stub as a context manager.
+
+        Yields:
+            ControllerServiceStub connected to the controller
+
+        The underlying channel is automatically closed when the context exits.
+        """
+        channel = await self.channel_factory()
+        try:
+            yield jumpstarter_pb2_grpc.ControllerServiceStub(channel)
+        finally:
+            await channel.close()
 
     async def _retry_stream(
         self,
@@ -223,11 +234,11 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         retries_left = retries
         while True:
             try:
-                controller = await self._get_controller_stub()
-                logger.debug("%s stream connected to controller", stream_name)
-                async for item in stream_factory(controller):
-                    logger.debug("%s stream received item", stream_name)
-                    await send_tx.send(item)
+                async with self._controller_stub() as controller:
+                    logger.debug("%s stream connected to controller", stream_name)
+                    async for item in stream_factory(controller):
+                        logger.debug("%s stream received item", stream_name)
+                        await send_tx.send(item)
             except Exception as e:
                 if retries_left > 0:
                     retries_left -= 1
@@ -284,13 +295,13 @@ class Exporter(AsyncContextManagerMixin, Metadata):
 
         # Register with the REMOTE controller (not the local session)
         logger.info("Registering exporter with controller")
-        controller = await self._get_controller_stub()
-        await controller.Register(
-            jumpstarter_pb2.RegisterRequest(
-                labels=self.labels,
-                reports=response.reports,
+        async with self._controller_stub() as controller:
+            await controller.Register(
+                jumpstarter_pb2.RegisterRequest(
+                    labels=self.labels,
+                    reports=response.reports,
+                )
             )
-        )
         # Mark exporter as registered internally
         self._registered = True
         # Only report AVAILABLE status during initial registration (no lease context)
@@ -309,13 +320,13 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             self._lease_context.update_status(status, message)
 
         try:
-            controller = await self._get_controller_stub()
-            await controller.ReportStatus(
-                jumpstarter_pb2.ReportStatusRequest(
-                    status=status.to_proto(),
-                    message=message,
+            async with self._controller_stub() as controller:
+                await controller.ReportStatus(
+                    jumpstarter_pb2.ReportStatusRequest(
+                        status=status.to_proto(),
+                        message=message,
+                    )
                 )
-            )
             logger.info(f"Updated status to {status}: {message}")
         except Exception as e:
             logger.error(f"Failed to update status: {e}")
@@ -332,14 +343,14 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             return
 
         try:
-            controller = await self._get_controller_stub()
-            await controller.ReportStatus(
-                jumpstarter_pb2.ReportStatusRequest(
-                    status=ExporterStatus.AVAILABLE.to_proto(),
-                    message="Lease released after afterLease hook",
-                    release_lease=True,
+            async with self._controller_stub() as controller:
+                await controller.ReportStatus(
+                    jumpstarter_pb2.ReportStatusRequest(
+                        status=ExporterStatus.AVAILABLE.to_proto(),
+                        message="Lease released after afterLease hook",
+                        release_lease=True,
+                    )
                 )
-            )
             logger.info("Requested controller to release lease %s", self._lease_context.lease_name)
         except Exception as e:
             logger.error("Failed to request lease release: %s", e)
@@ -421,9 +432,26 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         Args:
             lease_context: The LeaseContext for the current lease.
         """
-        logger.debug("_handle_end_session task started, waiting for end_session_requested event")
-        # Wait for client to signal end of session
-        await lease_context.end_session_requested.wait()
+        logger.debug("_handle_end_session task started, waiting for end_session_requested or lease_ended event")
+        # Wait for EndSession or lease end, whichever happens first
+        async with create_task_group() as wait_tg:
+
+            async def _wait_end_session():
+                await lease_context.end_session_requested.wait()
+                wait_tg.cancel_scope.cancel()
+
+            async def _wait_lease_end():
+                await lease_context.lease_ended.wait()
+                wait_tg.cancel_scope.cancel()
+
+            wait_tg.start_soon(_wait_end_session)
+            wait_tg.start_soon(_wait_lease_end)
+
+        # If lease ended without EndSession, exit cleanly (handle_lease finally block handles cleanup)
+        if lease_context.lease_ended.is_set() and not lease_context.end_session_requested.is_set():
+            logger.debug("Lease ended without EndSession; exiting EndSession handler")
+            return
+
         logger.debug("end_session_requested event received")
         logger.info("EndSession requested, running afterLease hook")
 
@@ -544,14 +572,6 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         # the client dials immediately after lease acquisition but before the session is ready.
         listen_tx, listen_rx = create_memory_object_stream[jumpstarter_pb2.ListenResponse](max_buffer_size=10)
 
-        # Start listening for connection requests with retry logic
-        tg.start_soon(
-            self._retry_stream,
-            "Listen",
-            self._listen_stream_factory(lease_name),
-            listen_tx,
-        )
-
         # Create session for the lease duration and populate lease_scope
         # Uses dual sockets: main socket for clients, hook socket for j commands
         async with self.session_for_lease() as (session, main_path, hook_path):
@@ -585,6 +605,15 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             # Type: request is jumpstarter_pb2.ListenResponse with router_endpoint and router_token fields
             try:
                 async with create_task_group() as conn_tg:
+                    # Start listening for connection requests with retry logic
+                    # This is inside conn_tg so it gets cancelled when the lease ends
+                    conn_tg.start_soon(
+                        self._retry_stream,
+                        "Listen",
+                        self._listen_stream_factory(lease_name),
+                        listen_tx,
+                    )
+
                     async def wait_for_lease_end():
                         """Wait for lease_ended event and cancel the connection loop."""
                         await lease_scope.lease_ended.wait()
@@ -612,6 +641,8 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                     conn_tg.start_soon(wait_for_lease_end)
                     conn_tg.start_soon(process_connections)
             finally:
+                # Close the listen stream to signal termination to listen_rx
+                await listen_tx.aclose()
                 # Run afterLease hook before closing the session
                 # This ensures the socket is still available for driver calls within the hook
                 # Shield from cancellation so the hook can complete even during shutdown
@@ -628,6 +659,10 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                                 self.stop,
                                 self._request_lease_release,
                             )
+                        else:
+                            # No hook configured or no client, transition to AVAILABLE
+                            logger.debug("No afterLease hook or no client on session close, transitioning to AVAILABLE")
+                            await self._report_status(ExporterStatus.AVAILABLE, "Available for new lease")
                         # Mark hook as done if we didn't run it (no hook configured or no client)
                         if not lease_scope.after_lease_hook_done.is_set():
                             lease_scope.after_lease_hook_done.set()
@@ -716,6 +751,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                                 self._lease_context,
                                 self._report_status,
                                 self.stop,  # Pass shutdown callback
+                                self._request_lease_release,  # Pass lease release callback
                             )
                         else:
                             # No hook configured, set event immediately

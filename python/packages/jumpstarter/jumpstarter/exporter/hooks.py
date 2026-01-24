@@ -299,14 +299,38 @@ class HookExecutor:
                                 logger.info("%s", line_decoded)
 
                 async def wait_for_process() -> int:
-                    """Wait for the subprocess to complete."""
+                    """Wait for the subprocess to complete.
+
+                    Ensures the subprocess is properly reaped even if cancelled,
+                    preventing zombie processes.
+                    """
                     logger.debug("wait_for_process: waiting for PID %d", process.pid)
-                    result = await anyio.to_thread.run_sync(
-                        process.wait,
-                        abandon_on_cancel=True
-                    )
-                    logger.debug("wait_for_process: PID %d exited with code %d", process.pid, result)
-                    return result
+                    try:
+                        result = await anyio.to_thread.run_sync(
+                            process.wait,
+                            abandon_on_cancel=True
+                        )
+                        logger.debug("wait_for_process: PID %d exited with code %d", process.pid, result)
+                        return result
+                    finally:
+                        # Ensure subprocess is reaped on cancellation to prevent zombies
+                        if process.poll() is None:
+                            logger.debug("wait_for_process: cleaning up still-running PID %d", process.pid)
+                            try:
+                                process.terminate()
+                                # Give it a moment to terminate gracefully
+                                for _ in range(10):
+                                    if process.poll() is not None:
+                                        break
+                                    await anyio.sleep(0.1)
+                                # Force kill if still running
+                                if process.poll() is None:
+                                    logger.debug("wait_for_process: force killing PID %d", process.pid)
+                                    process.kill()
+                                # Final reap with non-abandoning wait
+                                await anyio.to_thread.run_sync(process.wait, abandon_on_cancel=False)
+                            except Exception as e:
+                                logger.debug("wait_for_process: error during cleanup: %s", e)
 
                 # Use move_on_after for timeout
                 returncode: int | None = None
@@ -428,6 +452,7 @@ class HookExecutor:
         lease_scope: "LeaseContext",
         report_status: Callable[["ExporterStatus", str], Awaitable[None]],
         shutdown: Callable[..., None],
+        request_lease_release: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Execute before-lease hook with full orchestration.
 
@@ -442,6 +467,7 @@ class HookExecutor:
             lease_scope: LeaseScope containing session, socket_path, and sync event
             report_status: Async callback to report status changes to controller
             shutdown: Callback to trigger exporter shutdown (accepts optional exit_code kwarg)
+            request_lease_release: Async callback to request lease release from controller
         """
         try:
             # Wait for lease scope to be fully populated by handle_lease
@@ -490,13 +516,16 @@ class HookExecutor:
                 # Exit code 1 tells the CLI not to restart the exporter
                 shutdown(exit_code=1)
             else:
-                # on_failure='endLease' - just block this lease, exporter stays available
+                # on_failure='endLease' - end this lease, exporter stays available for new leases
                 logger.error("beforeLease hook failed with on_failure='endLease': %s", e)
                 await report_status(
                     ExporterStatus.BEFORE_LEASE_HOOK_FAILED,
                     f"beforeLease hook failed (on_failure=endLease): {e}",
                 )
-                # TODO: We need to implement a controller-side mechanism to end the lease here
+                # Request the controller to release the lease
+                if request_lease_release:
+                    logger.info("Requesting lease release due to beforeLease hook failure")
+                    await request_lease_release()
 
         except Exception as e:
             logger.error("beforeLease hook failed with unexpected error: %s", e, exc_info=True)

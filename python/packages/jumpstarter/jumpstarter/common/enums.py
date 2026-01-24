@@ -24,7 +24,7 @@ class ExporterStatus(IntEnum):
     """Exporter is leased and ready to accept commands"""
 
     AFTER_LEASE_HOOK = common_pb2.EXPORTER_STATUS_AFTER_LEASE_HOOK
-    """Lease was releaseed, but exporter is executing after lease hook"""
+    """Lease was released, but exporter is executing after lease hook"""
 
     BEFORE_LEASE_HOOK_FAILED = common_pb2.EXPORTER_STATUS_BEFORE_LEASE_HOOK_FAILED
     """The before lease hook failed and the exporter is no longer available"""
