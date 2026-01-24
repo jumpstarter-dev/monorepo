@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Self
 
+import grpc
 from anyio import (
     AsyncContextManagerMixin,
     CancelScope,
@@ -233,7 +234,27 @@ class Lease(ContextManagerMixin, AsyncContextManagerMixin):
 
     async def handle_async(self, stream):
         logger.debug("Connecting to Lease with name %s", self.name)
-        response = await self.controller.Dial(jumpstarter_pb2.DialRequest(lease_name=self.name))
+        # Retry Dial with exponential backoff for transient "exporter not ready" errors.
+        # This handles the race condition where the client acquires a lease before
+        # the exporter has transitioned to LEASE_READY status.
+        max_retries = 15
+        base_delay = 0.3
+        max_delay = 2.0
+        for attempt in range(max_retries):
+            try:
+                response = await self.controller.Dial(jumpstarter_pb2.DialRequest(lease_name=self.name))
+                break
+            except AioRpcError as e:
+                if e.code() == grpc.StatusCode.FAILED_PRECONDITION and "not ready" in str(e.details()):
+                    if attempt < max_retries - 1:
+                        delay = min(base_delay * (2 ** attempt), max_delay)
+                        logger.debug(
+                            "Exporter not ready, retrying Dial in %.1fs (attempt %d/%d)",
+                            delay, attempt + 1, max_retries
+                        )
+                        await sleep(delay)
+                        continue
+                raise
         async with connect_router_stream(
             response.router_endpoint, response.router_token, stream, self.tls_config, self.grpc_options
         ):

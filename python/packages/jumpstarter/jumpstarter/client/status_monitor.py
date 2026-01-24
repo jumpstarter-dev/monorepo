@@ -7,10 +7,10 @@ specific statuses are reached.
 
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 
 import anyio
 from anyio import Event, create_task_group
-from contextlib import AsyncExitStack
 from grpc import StatusCode
 from grpc.aio import AioRpcError
 from jumpstarter_protocol import jumpstarter_pb2
