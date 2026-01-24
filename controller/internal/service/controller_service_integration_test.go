@@ -98,11 +98,10 @@ var _ = Describe("ControllerService Integration", func() {
 					Name:      "exporter-with-lease",
 					Namespace: testNamespace,
 				},
-				Status: jumpstarterdevv1alpha1.ExporterStatus{
-					LeaseRef: &corev1.LocalObjectReference{Name: "lease-to-release"},
-				},
 			}
 			Expect(k8sClient.Create(ctx, exporter)).To(Succeed())
+
+			exporter.Status.LeaseRef = &corev1.LocalObjectReference{Name: "lease-to-release"}
 			Expect(k8sClient.Status().Update(ctx, exporter)).To(Succeed())
 
 			err := controllerService.handleExporterLeaseRelease(ctx, exporter)
@@ -144,11 +143,10 @@ var _ = Describe("ControllerService Integration", func() {
 					Name:      "exporter-lease-releasing",
 					Namespace: testNamespace,
 				},
-				Status: jumpstarterdevv1alpha1.ExporterStatus{
-					LeaseRef: &corev1.LocalObjectReference{Name: "lease-already-releasing"},
-				},
 			}
 			Expect(k8sClient.Create(ctx, exporter)).To(Succeed())
+
+			exporter.Status.LeaseRef = &corev1.LocalObjectReference{Name: "lease-already-releasing"}
 			Expect(k8sClient.Status().Update(ctx, exporter)).To(Succeed())
 
 			err := controllerService.handleExporterLeaseRelease(ctx, exporter)
@@ -182,11 +180,10 @@ var _ = Describe("ControllerService Integration", func() {
 					Name:      "exporter-lease-ended",
 					Namespace: testNamespace,
 				},
-				Status: jumpstarterdevv1alpha1.ExporterStatus{
-					LeaseRef: &corev1.LocalObjectReference{Name: "lease-already-ended"},
-				},
 			}
 			Expect(k8sClient.Create(ctx, exporter)).To(Succeed())
+
+			exporter.Status.LeaseRef = &corev1.LocalObjectReference{Name: "lease-already-ended"}
 			Expect(k8sClient.Status().Update(ctx, exporter)).To(Succeed())
 
 			err := controllerService.handleExporterLeaseRelease(ctx, exporter)
@@ -219,11 +216,10 @@ var _ = Describe("ControllerService Integration", func() {
 					Name:      "exporter-wrong-owner",
 					Namespace: testNamespace,
 				},
-				Status: jumpstarterdevv1alpha1.ExporterStatus{
-					LeaseRef: &corev1.LocalObjectReference{Name: "lease-wrong-owner"},
-				},
 			}
 			Expect(k8sClient.Create(ctx, exporter)).To(Succeed())
+
+			exporter.Status.LeaseRef = &corev1.LocalObjectReference{Name: "lease-wrong-owner"}
 			Expect(k8sClient.Status().Update(ctx, exporter)).To(Succeed())
 
 			err := controllerService.handleExporterLeaseRelease(ctx, exporter)
@@ -257,11 +253,10 @@ var _ = Describe("ControllerService Integration", func() {
 					Name:      "exporter-nil-ref",
 					Namespace: testNamespace,
 				},
-				Status: jumpstarterdevv1alpha1.ExporterStatus{
-					LeaseRef: &corev1.LocalObjectReference{Name: "lease-no-exporter-ref"},
-				},
 			}
 			Expect(k8sClient.Create(ctx, exporter)).To(Succeed())
+
+			exporter.Status.LeaseRef = &corev1.LocalObjectReference{Name: "lease-no-exporter-ref"}
 			Expect(k8sClient.Status().Update(ctx, exporter)).To(Succeed())
 
 			err := controllerService.handleExporterLeaseRelease(ctx, exporter)
