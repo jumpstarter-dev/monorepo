@@ -1665,9 +1665,9 @@ var _ = Describe("Scheduled Leases", func() {
 			ctx := context.Background()
 
 			// Give lease1 an earlier BeginTime to ensure deterministic ordering
-			// Stagger them closely so both BeginTimes will have passed by the time we check lease2
+			// Use a larger gap (500ms) to avoid race conditions in CI environments
 			lease1BeginTime := metav1.NewTime(time.Now().Truncate(time.Second).Add(1 * time.Second))
-			lease2BeginTime := metav1.NewTime(time.Now().Truncate(time.Second).Add(1*time.Second + 100*time.Millisecond))
+			lease2BeginTime := metav1.NewTime(time.Now().Truncate(time.Second).Add(1*time.Second + 500*time.Millisecond))
 
 			// Both leases target dut:b (only one exporter available)
 			lease1 := leaseDutA2Sec.DeepCopy()
