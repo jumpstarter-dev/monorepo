@@ -157,7 +157,7 @@ class HookExecutor:
         else:
             raise error
 
-    async def _execute_hook_process(
+    async def _execute_hook_process(  # noqa: C901
         self,
         hook_config: HookInstanceConfigV1Alpha1,
         lease_scope: "LeaseContext",
@@ -231,7 +231,7 @@ class HookExecutor:
                 fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
                 logger.debug("Master fd set to non-blocking")
 
-                async def read_pty_output() -> None:
+                async def read_pty_output() -> None:  # noqa: C901
                     """Read from PTY master fd line by line using non-blocking I/O."""
                     logger.debug("read_pty_output task started")
                     buffer = b""
@@ -256,7 +256,9 @@ class HookExecutor:
                                 # Log heartbeat every 2 seconds
                                 elapsed = time.monotonic() - start_time
                                 if elapsed - last_heartbeat >= 2.0:
-                                    logger.debug("read_pty_output: heartbeat at %.1fs, iterations=%d", elapsed, read_count)
+                                    logger.debug(
+                                        "read_pty_output: heartbeat at %.1fs, iterations=%d", elapsed, read_count
+                                    )
                                     last_heartbeat = elapsed
 
                                 # Read available data (non-blocking)

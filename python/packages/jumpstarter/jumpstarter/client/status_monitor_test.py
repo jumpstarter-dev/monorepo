@@ -1,6 +1,6 @@
 """Tests for StatusMonitor background polling and status tracking."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import anyio
 import pytest

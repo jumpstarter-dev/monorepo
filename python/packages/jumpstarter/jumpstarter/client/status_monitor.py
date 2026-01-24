@@ -117,7 +117,9 @@ class StatusMonitor:
         """
         self._on_status_change.append(callback)
 
-    async def wait_for_status(self, target: ExporterStatus, timeout: float | None = None) -> bool:
+    async def wait_for_status(  # noqa: C901
+        self, target: ExporterStatus, timeout: float | None = None
+    ) -> bool:
         """Wait for a specific status (non-blocking to other tasks).
 
         Args:
@@ -194,7 +196,7 @@ class StatusMonitor:
         else:
             return await wait_loop()
 
-    async def wait_for_any_of(
+    async def wait_for_any_of(  # noqa: C901
         self, targets: list[ExporterStatus], timeout: float | None = None
     ) -> ExporterStatus | None:
         """Wait for any of the specified statuses.
@@ -278,7 +280,7 @@ class StatusMonitor:
         else:
             return await wait_for_first()
 
-    async def _poll_loop(self):
+    async def _poll_loop(self):  # noqa: C901
         """Background polling loop."""
         self._poll_task_started.set()
         logger.debug("Status monitor poll loop started")

@@ -16,7 +16,9 @@ def _opt_log_level_callback(ctx, param, value):
         # on a exporter run we don't want to use RichHandler for logs, just plain logs for the system journal
         basicConfig = partial(logging.basicConfig)
     else:
-        basicConfig = partial(logging.basicConfig, format="%(message)s [%(name)s]", handlers=[RichHandler(show_path=False)])
+        basicConfig = partial(
+            logging.basicConfig, format="%(message)s [%(name)s]", handlers=[RichHandler(show_path=False)]
+        )
 
     if value:
         basicConfig(level=value.upper())

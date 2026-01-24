@@ -1,6 +1,5 @@
 """Tests for enum conversions and string representations."""
 
-import pytest
 from jumpstarter_protocol.jumpstarter.v1 import common_pb2
 
 from jumpstarter.common.enums import ExporterStatus, LogSource

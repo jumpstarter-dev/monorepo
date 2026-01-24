@@ -437,10 +437,10 @@ class AsyncDriverClient(
                 yield metadata.resource.model_dump(mode="json")
 
     @asynccontextmanager
-    async def log_stream_async(self, show_all_logs: bool = True):
+    async def log_stream_async(self, show_all_logs: bool = True):  # noqa: C901
         import anyio
 
-        async def log_stream():
+        async def log_stream():  # noqa: C901
             from jumpstarter.common import LogSource
 
             reconnect_delay = 0.1  # Start with 100ms delay

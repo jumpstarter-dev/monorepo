@@ -1,6 +1,5 @@
 """Tests for client factory functions."""
 
-from collections import OrderedDict
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4

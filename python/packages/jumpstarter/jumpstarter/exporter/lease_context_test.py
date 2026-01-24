@@ -1,6 +1,5 @@
 """Tests for LeaseContext dataclass."""
 
-from contextlib import nullcontext
 from unittest.mock import MagicMock
 
 import pytest

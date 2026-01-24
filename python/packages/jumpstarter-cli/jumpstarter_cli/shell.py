@@ -178,7 +178,7 @@ async def _run_shell_with_lease_async(lease, exporter_logs, config, command, can
                             return exit_code
 
 
-async def _shell_with_signal_handling(
+async def _shell_with_signal_handling(  # noqa: C901
     config, selector, lease_name, duration, exporter_logs, command, acquisition_timeout
 ):
     """Handle lease acquisition and shell execution with signal handling."""
