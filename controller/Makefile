@@ -63,6 +63,13 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 						output:crd:artifacts:config=deploy/helm/jumpstarter/crds/ \
 						output:rbac:artifacts:config=deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/rbac/
 
+	# Add ArgoCD sync-wave annotation to RBAC role for proper deployment ordering (PR #207)
+	@awk '/^  name: jumpstarter-manager-role$$/{print; print "  annotations:"; print "    argocd.argoproj.io/sync-wave: \"-1\""; next}1' \
+		deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/rbac/role.yaml > \
+		deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/rbac/role.yaml.tmp && \
+		mv deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/rbac/role.yaml.tmp \
+		deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/rbac/role.yaml
+
 	cp deploy/helm/jumpstarter/crds/* deploy/operator/config/crd/bases/
 	cp deploy/helm/jumpstarter/crds/* deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/crds/
 
