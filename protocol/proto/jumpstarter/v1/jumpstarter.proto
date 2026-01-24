@@ -119,6 +119,7 @@ message AuditStreamRequest {
 message ReportStatusRequest {
   ExporterStatus status = 1;
   optional string message = 2;  // Optional human-readable status message
+  optional bool release_lease = 3;  // When true, controller should release the active lease
 }
 
 message ReportStatusResponse {}
@@ -227,6 +228,8 @@ message GetStatusRequest {}
 message GetStatusResponse {
   ExporterStatus status = 1;
   optional string message = 2;
+  uint64 status_version = 3;           // Monotonic counter, increments on each status change
+  optional ExporterStatus previous_status = 4;  // Previous status for transition tracking
 }
 
 message EndSessionRequest {}
