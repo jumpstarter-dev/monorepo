@@ -73,6 +73,9 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	cp deploy/helm/jumpstarter/crds/* deploy/operator/config/crd/bases/
 	cp deploy/helm/jumpstarter/crds/* deploy/helm/jumpstarter/charts/jumpstarter-controller/templates/crds/
 
+	# Regenerate operator install.yaml to include updated CRDs
+	$(MAKE) -C deploy/operator build-installer
+
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..." paths="./internal/..."
