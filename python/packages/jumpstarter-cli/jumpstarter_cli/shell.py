@@ -154,10 +154,10 @@ async def _run_shell_with_lease_async(lease, exporter_logs, config, command, can
                                     if success:
                                         # Wait for hook to complete using background monitor
                                         # This allows afterLease logs to be displayed in real-time
-                                        with anyio.move_on_after(300) as timeout_scope:  # 5 minute timeout
+                                        with anyio.move_on_after(30) as timeout_scope:  # 30 second timeout
                                             result = await monitor.wait_for_any_of(
                                                 [ExporterStatus.AVAILABLE, ExporterStatus.AFTER_LEASE_HOOK_FAILED],
-                                                timeout=300.0
+                                                timeout=30.0
                                             )
                                             if result == ExporterStatus.AVAILABLE:
                                                 logger.info("afterLease hook completed")

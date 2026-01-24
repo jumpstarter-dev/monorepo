@@ -449,7 +449,8 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                     )
                 logger.info("afterLease hook completed via EndSession")
             else:
-                logger.debug("No afterLease hook configured or no client, skipping")
+                logger.debug("No afterLease hook configured or no client, transitioning to AVAILABLE")
+                await self._report_status(ExporterStatus.AVAILABLE, "Available for new lease")
         except Exception as e:
             logger.error("Error running afterLease hook via EndSession: %s", e)
         finally:
