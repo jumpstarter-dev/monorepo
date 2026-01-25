@@ -60,7 +60,7 @@ class MockExporterStub:
         self._call_count = 0
         self._repeat_last = repeat_last
 
-    async def GetStatus(self, request):
+    async def GetStatus(self, request, timeout=None):
         self._call_count += 1
         if self._index < len(self._responses):
             response = self._responses[self._index]
@@ -193,15 +193,16 @@ class TestStatusMonitorPolling:
         assert call_count <= 2
 
     async def test_poll_loop_fast_polling_with_waiters(self) -> None:
-        """Test that poll loop uses fast interval when waiters are active."""
+        """Test that poll loop uses critical interval when waiters are active."""
         responses = [
             create_status_response(ExporterStatus.LEASE_READY, version=1),
         ]
         stub = MockExporterStub(responses)
         monitor = StatusMonitor(stub, poll_interval=0.05)
+        monitor._critical_poll_interval = 0.05  # Set critical interval for test
         monitor._slow_poll_interval = 1.0
 
-        # Simulate active waiter
+        # Simulate active waiter - should use critical polling
         monitor._active_waiters = 1
 
         async with anyio.create_task_group() as tg:
@@ -210,8 +211,36 @@ class TestStatusMonitorPolling:
             call_count = stub._call_count
             await monitor.stop()
 
-        # Should have polled multiple times due to fast polling
+        # Should have polled multiple times due to critical polling
         assert call_count >= 3
+
+    async def test_poll_loop_critical_polling_with_waiters(self) -> None:
+        """Test that poll loop uses critical (fastest) interval when waiters are active.
+
+        Critical polling uses 0.1s interval to catch brief status changes
+        before connections close.
+        """
+        responses = [
+            create_status_response(ExporterStatus.AVAILABLE, version=1),
+        ]
+        stub = MockExporterStub(responses)
+        # Set normal poll interval much higher to distinguish from critical
+        monitor = StatusMonitor(stub, poll_interval=0.5)
+        monitor._critical_poll_interval = 0.05  # Very fast for testing
+        monitor._slow_poll_interval = 1.0
+
+        # Simulate active waiter - should use critical polling
+        monitor._active_waiters = 1
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+            await anyio.sleep(0.25)
+            call_count = stub._call_count
+            await monitor.stop()
+
+        # With 0.05s critical interval and 0.25s sleep, should poll ~5 times
+        # With 0.5s normal interval, would only poll ~1 time
+        assert call_count >= 4
 
     async def test_poll_loop_handles_unimplemented(self) -> None:
         """Test that poll loop exits gracefully on UNIMPLEMENTED."""
@@ -243,6 +272,27 @@ class TestStatusMonitorPolling:
             await monitor.stop()
 
         assert monitor.connection_lost
+
+    async def test_poll_loop_handles_deadline_exceeded(self) -> None:
+        """Test that poll loop sets connection_lost on DEADLINE_EXCEEDED.
+
+        When GetStatus times out (DEADLINE_EXCEEDED), the monitor should treat
+        this as a connection loss to avoid waiting for gRPC keepalive timeout.
+        """
+        responses = [
+            create_status_response(ExporterStatus.AVAILABLE, version=1),
+            create_mock_rpc_error(StatusCode.DEADLINE_EXCEEDED),
+        ]
+        stub = MockExporterStub(responses)
+        monitor = StatusMonitor(stub, poll_interval=0.05)
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+            await anyio.sleep(0.15)
+            await monitor.stop()
+
+        assert monitor.connection_lost
+        assert not monitor._running
 
 
 class TestStatusMonitorWaitForStatus:
@@ -339,6 +389,36 @@ class TestStatusMonitorWaitForStatus:
 
         # Should return False promptly (well before the 2s timeout)
         assert result is False
+        # Monitor should have stopped running
+        assert not monitor._running
+
+    async def test_wait_for_status_deadline_exceeded_returns_promptly(self) -> None:
+        """Test wait_for_status returns promptly when DEADLINE_EXCEEDED is received.
+
+        When GetStatus times out (DEADLINE_EXCEEDED), the monitor should signal
+        waiters so they don't hang waiting for gRPC keepalive timeout (24s).
+        """
+        # First return AVAILABLE, then DEADLINE_EXCEEDED to simulate timeout
+        responses = [
+            create_status_response(ExporterStatus.AVAILABLE, version=1),
+            create_mock_rpc_error(StatusCode.DEADLINE_EXCEEDED),
+        ]
+        stub = MockExporterStub(responses)
+        monitor = StatusMonitor(stub, poll_interval=0.05)
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+
+            # Wait for a status that will never be reached - should return promptly
+            # when DEADLINE_EXCEEDED is received, not hang until timeout
+            result = await monitor.wait_for_status(ExporterStatus.LEASE_READY, timeout=2.0)
+
+            await monitor.stop()
+
+        # Should return False promptly (well before the 2s timeout)
+        assert result is False
+        # Monitor should have marked connection as lost
+        assert monitor.connection_lost
         # Monitor should have stopped running
         assert not monitor._running
 

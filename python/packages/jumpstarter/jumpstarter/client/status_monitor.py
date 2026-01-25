@@ -77,6 +77,9 @@ class StatusMonitor:
         # Slow polling mode - used when idle (e.g., shell running)
         self._slow_poll_interval: float = 5.0
 
+        # Critical poll interval - very fast polling when actively waiting for status
+        self._critical_poll_interval: float = 0.1
+
         # Track if we're actively waiting for a status (forces fast polling)
         self._active_waiters: int = 0
 
@@ -291,7 +294,10 @@ class StatusMonitor:
 
         while self._running:
             try:
-                response = await self._stub.GetStatus(jumpstarter_pb2.GetStatusRequest())
+                response = await self._stub.GetStatus(
+                    jumpstarter_pb2.GetStatusRequest(),
+                    timeout=5.0
+                )
                 new_status = ExporterStatus.from_proto(response.status)
                 new_version = response.status_version
                 previous = (
@@ -357,18 +363,28 @@ class StatusMonitor:
                     self._any_change_event.set()
                     self._any_change_event = Event()
                     break
+                elif e.code() == StatusCode.DEADLINE_EXCEEDED:
+                    # Timeout - connection might be dead
+                    logger.info("GetStatus call timed out (DEADLINE_EXCEEDED), treating as connection lost")
+                    self._connection_lost = True
+                    self._running = False
+                    self._any_change_event.set()
+                    self._any_change_event = Event()
+                    break
                 logger.debug(f"GetStatus poll error: {e.code()}")
             except Exception as e:
                 logger.debug(f"GetStatus poll error: {e}")
 
             # Wait for next poll or stop signal
-            # Use fast polling when there are active waiters or status is not LEASE_READY
-            # Use slow polling only when idle in LEASE_READY state
-            use_slow_polling = (
-                self._active_waiters == 0
-                and self._current_status == ExporterStatus.LEASE_READY
-            )
-            interval = self._slow_poll_interval if use_slow_polling else self._poll_interval
+            # Use critical (very fast) polling when there are active waiters
+            # Use slow polling when idle in LEASE_READY state
+            # Use normal polling otherwise
+            if self._active_waiters > 0:
+                interval = self._critical_poll_interval  # 0.1s when actively waiting
+            elif self._current_status == ExporterStatus.LEASE_READY:
+                interval = self._slow_poll_interval  # 5s when idle in LEASE_READY
+            else:
+                interval = self._poll_interval  # 0.3s normal polling
             with anyio.move_on_after(interval):
                 await self._stop_event.wait()
                 logger.debug("Stop event received, exiting poll loop")
