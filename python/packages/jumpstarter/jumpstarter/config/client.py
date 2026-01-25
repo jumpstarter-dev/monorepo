@@ -98,6 +98,7 @@ class ClientConfigV1Alpha1Lease(BaseSettings):
         default=30.0,
         description="Timeout in seconds for Dial retry loop when exporter not ready",
         gt=0,
+        exclude=True,  # Internal field, not serialized to config files
     )
 
 
