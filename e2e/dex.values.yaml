@@ -30,6 +30,14 @@ config:
       hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W" # password
       username: "test-exporter-oidc"
       userID: "a4cb4de2-4467-4e5c-a42a-33be8783649d"
+    - email: "test-client-hooks@example.com"
+      hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W" # password
+      username: "test-client-hooks"
+      userID: "b5dc5e3f-5578-5f6d-b53b-44cf9894760e"
+    - email: "test-exporter-hooks@example.com"
+      hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W" # password
+      username: "test-exporter-hooks"
+      userID: "c6ed6f40-6689-6g7e-c64c-55d0a9a5871f"
   connectors:
     - name: kubernetes
       type: oidc

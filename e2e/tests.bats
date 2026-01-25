@@ -118,11 +118,11 @@ wait_for_exporter() {
     --connector-id kubernetes \
     --token $(kubectl create -n "${JS_NAMESPACE}" token test-exporter-sa)
 
-  go run github.com/mikefarah/yq/v4@latest -i ". * load(\"e2e/exporter.yaml\")" \
+  go run github.com/mikefarah/yq/v4@latest -i ". * load(\"e2e/exporters/exporter.yaml\")" \
     /etc/jumpstarter/exporters/test-exporter-oidc.yaml
-  go run github.com/mikefarah/yq/v4@latest -i ". * load(\"e2e/exporter.yaml\")" \
+  go run github.com/mikefarah/yq/v4@latest -i ". * load(\"e2e/exporters/exporter.yaml\")" \
     /etc/jumpstarter/exporters/test-exporter-sa.yaml
-  go run github.com/mikefarah/yq/v4@latest -i ". * load(\"e2e/exporter.yaml\")" \
+  go run github.com/mikefarah/yq/v4@latest -i ". * load(\"e2e/exporters/exporter.yaml\")" \
     /etc/jumpstarter/exporters/test-exporter-legacy.yaml
  
   jmp config client   list

@@ -1,0 +1,13 @@
+export:
+  power:
+    type: jumpstarter_driver_power.driver.MockPower
+  storage:
+    type: jumpstarter_driver_opendal.driver.MockStorageMux
+
+hooks:
+  beforeLease:
+    script: |
+      echo "HOOK_TIMEOUT: starting"
+      sleep 3600
+    timeout: 5
+    onFailure: warn

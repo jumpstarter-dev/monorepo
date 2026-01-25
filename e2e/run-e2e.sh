@@ -98,9 +98,9 @@ run_tests() {
     # Setup bats environment
     setup_bats_env
     
-    # Run bats tests
+    # Run bats tests (all .bats files in e2e directory)
     log_info "Running bats tests..."
-    bats --show-output-of-passing-tests --verbose-run "$SCRIPT_DIR"/tests.bats
+    bats --show-output-of-passing-tests --verbose-run "$SCRIPT_DIR"/*.bats
 }
 
 # Full setup and run (for CI or first-time use)

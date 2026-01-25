@@ -1,0 +1,21 @@
+export:
+  power:
+    type: jumpstarter_driver_power.driver.MockPower
+  storage:
+    type: jumpstarter_driver_opendal.driver.MockStorageMux
+
+hooks:
+  beforeLease:
+    script: |
+      echo "BEFORE_HOOK: lease=$LEASE_NAME client=$CLIENT_NAME"
+      j power on
+      echo "BEFORE_HOOK: complete"
+    timeout: 60
+    onFailure: warn
+  afterLease:
+    script: |
+      echo "AFTER_HOOK: cleaning up"
+      j power off
+      echo "AFTER_HOOK: complete"
+    timeout: 60
+    onFailure: warn
