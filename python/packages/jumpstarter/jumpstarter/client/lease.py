@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import (
     ExitStack,
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Self
 
+import grpc
 from anyio import (
     AsyncContextManagerMixin,
     CancelScope,
@@ -53,6 +55,7 @@ class Lease(ContextManagerMixin, AsyncContextManagerMixin):
     tls_config: TLSConfigV1Alpha1 = field(default_factory=TLSConfigV1Alpha1)
     grpc_options: dict[str, Any] = field(default_factory=dict)
     acquisition_timeout: int = field(default=7200)  # Timeout in seconds for lease acquisition, polled in 5s intervals
+    dial_timeout: float = field(default=30.0)  # Timeout in seconds for Dial retry loop when exporter not ready
     exporter_name: str = field(default="remote", init=False)  # Populated during acquisition
     lease_ending_callback: Callable[[Self, timedelta], None] | None = field(
         default=None, init=False
@@ -233,7 +236,36 @@ class Lease(ContextManagerMixin, AsyncContextManagerMixin):
 
     async def handle_async(self, stream):
         logger.debug("Connecting to Lease with name %s", self.name)
-        response = await self.controller.Dial(jumpstarter_pb2.DialRequest(lease_name=self.name))
+        # Retry Dial with exponential backoff for transient "exporter not ready" errors.
+        # This handles the race condition where the client acquires a lease before
+        # the exporter has transitioned to LEASE_READY status.
+        # Uses time-based retry bounded by dial_timeout instead of fixed retry count.
+        base_delay = 0.3
+        max_delay = 2.0
+        deadline = time.monotonic() + self.dial_timeout
+        attempt = 0
+        while True:
+            try:
+                response = await self.controller.Dial(jumpstarter_pb2.DialRequest(lease_name=self.name))
+                break
+            except AioRpcError as e:
+                if e.code() == grpc.StatusCode.FAILED_PRECONDITION and "not ready" in str(e.details()):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        logger.debug(
+                            "Exporter not ready and dial timeout (%.1fs) exceeded after %d attempts",
+                            self.dial_timeout, attempt + 1
+                        )
+                        raise
+                    delay = min(base_delay * (2 ** attempt), max_delay, remaining)
+                    logger.debug(
+                        "Exporter not ready, retrying Dial in %.1fs (attempt %d, %.1fs remaining)",
+                        delay, attempt + 1, remaining
+                    )
+                    await sleep(delay)
+                    attempt += 1
+                    continue
+                raise
         async with connect_router_stream(
             response.router_endpoint, response.router_token, stream, self.tls_config, self.grpc_options
         ):
@@ -244,16 +276,22 @@ class Lease(ContextManagerMixin, AsyncContextManagerMixin):
         async with TemporaryUnixListener(self.handle_async) as path:
             logger.debug("Serving Unix socket at %s", path)
             await self._wait_for_ready_connection(path)
-            # TODO: talk to the exporter to make sure it's ready.... (once we have the hooks)
             yield path
 
     async def _wait_for_ready_connection(self, path: str):
+        """Wait for the basic gRPC connection to be established.
+
+        This only waits for the connection to be available. It does NOT wait
+        for beforeLease hooks to complete - that should be done after log
+        streaming is started so hook output can be displayed in real-time.
+        """
         retries_left = 5
         logger.info("Waiting for ready connection at %s", path)
         while True:
             try:
                 with ExitStack() as stack:
                     async with client_from_path(path, self.portal, stack, allow=self.allow, unsafe=self.unsafe) as _:
+                        # Connection established
                         break
             except AioRpcError as e:
                 if retries_left > 1:

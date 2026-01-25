@@ -301,7 +301,10 @@ TEST_EXPORTER = V1Alpha1Exporter(
     kind="Exporter",
     metadata=V1ObjectMeta(name="test", namespace="testing", creation_timestamp="2024-01-01T21:00:00Z"),
     status=V1Alpha1ExporterStatus(
-        endpoint="grpc://example.com:443", credential=V1ObjectReference(name="test-credential"), devices=[]
+        endpoint="grpc://example.com:443",
+        credential=V1ObjectReference(name="test-credential"),
+        devices=[],
+        exporter_status="Available",
     ),
 )
 
@@ -318,7 +321,9 @@ TEST_EXPORTER_JSON = """{
             "name": "test-credential"
         },
         "devices": [],
-        "endpoint": "grpc://example.com:443"
+        "endpoint": "grpc://example.com:443",
+        "exporterStatus": "Available",
+        "statusMessage": null
     }
 }
 """
@@ -334,6 +339,8 @@ status:
     name: test-credential
   devices: []
   endpoint: grpc://example.com:443
+  exporterStatus: Available
+  statusMessage: null
 
 """
 
@@ -348,6 +355,7 @@ def test_get_exporter(_load_kube_config_mock, get_exporter_mock: AsyncMock):
     result = runner.invoke(get, ["exporter", "test"])
     assert result.exit_code == 0
     assert "test" in result.output
+    assert "Available" in result.output
     assert "grpc://example.com:443" in result.output
     get_exporter_mock.reset_mock()
 
@@ -396,6 +404,7 @@ TEST_EXPORTER_DEVICES = V1Alpha1Exporter(
             V1Alpha1ExporterDevice(labels={"hardware": "rpi4"}, uuid="82a8ac0d-d7ff-4009-8948-18a3c5c607b1"),
             V1Alpha1ExporterDevice(labels={"hardware": "rpi4"}, uuid="f7cd30ac-64a3-42c6-ba31-b25f033b97c1"),
         ],
+        exporter_status="Available",
     ),
 )
 
@@ -425,7 +434,9 @@ TEST_EXPORTER_DEVICES_JSON = """{
                 "uuid": "f7cd30ac-64a3-42c6-ba31-b25f033b97c1"
             }
         ],
-        "endpoint": "grpc://example.com:443"
+        "endpoint": "grpc://example.com:443",
+        "exporterStatus": "Available",
+        "statusMessage": null
     }
 }
 """
@@ -447,6 +458,8 @@ status:
       hardware: rpi4
     uuid: f7cd30ac-64a3-42c6-ba31-b25f033b97c1
   endpoint: grpc://example.com:443
+  exporterStatus: Available
+  statusMessage: null
 
 """
 
@@ -460,6 +473,7 @@ def test_get_exporter_devices(_load_kube_config_mock, get_exporter_mock: AsyncMo
     result = runner.invoke(get, ["exporter", "test", "--devices"])
     assert result.exit_code == 0
     assert "test" in result.output
+    assert "Available" in result.output
     assert "grpc://example.com:443" in result.output
     assert "hardware:rpi4" in result.output
     assert "82a8ac0d-d7ff-4009-8948-18a3c5c607b1" in result.output
@@ -510,6 +524,7 @@ EXPORTERS_LIST = V1Alpha1ExporterList(
                 endpoint="grpc://example.com:443",
                 credential=V1ObjectReference(name="test-credential"),
                 devices=[],
+                exporter_status="Available",
             ),
         ),
         V1Alpha1Exporter(
@@ -520,6 +535,7 @@ EXPORTERS_LIST = V1Alpha1ExporterList(
                 endpoint="grpc://example.com:443",
                 credential=V1ObjectReference(name="another-credential"),
                 devices=[],
+                exporter_status="Available",
             ),
         ),
     ]
@@ -541,7 +557,9 @@ EXPORTERS_LIST_JSON = """{
                     "name": "test-credential"
                 },
                 "devices": [],
-                "endpoint": "grpc://example.com:443"
+                "endpoint": "grpc://example.com:443",
+                "exporterStatus": "Available",
+                "statusMessage": null
             }
         },
         {
@@ -557,7 +575,9 @@ EXPORTERS_LIST_JSON = """{
                     "name": "another-credential"
                 },
                 "devices": [],
-                "endpoint": "grpc://example.com:443"
+                "endpoint": "grpc://example.com:443",
+                "exporterStatus": "Available",
+                "statusMessage": null
             }
         }
     ],
@@ -578,6 +598,8 @@ items:
       name: test-credential
     devices: []
     endpoint: grpc://example.com:443
+    exporterStatus: Available
+    statusMessage: null
 - apiVersion: jumpstarter.dev/v1alpha1
   kind: Exporter
   metadata:
@@ -589,6 +611,8 @@ items:
       name: another-credential
     devices: []
     endpoint: grpc://example.com:443
+    exporterStatus: Available
+    statusMessage: null
 kind: ExporterList
 
 """
@@ -609,6 +633,7 @@ def test_get_exporters(_load_kube_config_mock, list_exporters_mock: AsyncMock):
     assert result.exit_code == 0
     assert "test" in result.output
     assert "another" in result.output
+    assert "Available" in result.output
     list_exporters_mock.reset_mock()
 
     # List exporters JSON output
@@ -655,6 +680,7 @@ EXPORTER_DEVICES_LIST = V1Alpha1ExporterList(
                 devices=[
                     V1Alpha1ExporterDevice(labels={"hardware": "rpi4"}, uuid="82a8ac0d-d7ff-4009-8948-18a3c5c607b1")
                 ],
+                exporter_status="Available",
             ),
         ),
         V1Alpha1Exporter(
@@ -667,6 +693,7 @@ EXPORTER_DEVICES_LIST = V1Alpha1ExporterList(
                 devices=[
                     V1Alpha1ExporterDevice(labels={"hardware": "rpi4"}, uuid="f7cd30ac-64a3-42c6-ba31-b25f033b97c1"),
                 ],
+                exporter_status="Available",
             ),
         ),
     ]
@@ -695,7 +722,9 @@ EXPORTERS_DEVICES_LIST_JSON = """{
                         "uuid": "82a8ac0d-d7ff-4009-8948-18a3c5c607b1"
                     }
                 ],
-                "endpoint": "grpc://example.com:443"
+                "endpoint": "grpc://example.com:443",
+                "exporterStatus": "Available",
+                "statusMessage": null
             }
         },
         {
@@ -718,7 +747,9 @@ EXPORTERS_DEVICES_LIST_JSON = """{
                         "uuid": "f7cd30ac-64a3-42c6-ba31-b25f033b97c1"
                     }
                 ],
-                "endpoint": "grpc://example.com:443"
+                "endpoint": "grpc://example.com:443",
+                "exporterStatus": "Available",
+                "statusMessage": null
             }
         }
     ],
@@ -742,6 +773,8 @@ items:
         hardware: rpi4
       uuid: 82a8ac0d-d7ff-4009-8948-18a3c5c607b1
     endpoint: grpc://example.com:443
+    exporterStatus: Available
+    statusMessage: null
 - apiVersion: jumpstarter.dev/v1alpha1
   kind: Exporter
   metadata:
@@ -756,6 +789,8 @@ items:
         hardware: rpi4
       uuid: f7cd30ac-64a3-42c6-ba31-b25f033b97c1
     endpoint: grpc://example.com:443
+    exporterStatus: Available
+    statusMessage: null
 kind: ExporterList
 
 """
@@ -774,6 +809,7 @@ def test_get_exporters_devices(_load_kube_config_mock, list_exporters_mock: Asyn
     assert result.exit_code == 0
     assert "test" in result.output
     assert "another" in result.output
+    assert "Available" in result.output
     assert "hardware:rpi4" in result.output
     assert "82a8ac0d-d7ff-4009-8948-18a3c5c607b1" in result.output
     assert "f7cd30ac-64a3-42c6-ba31-b25f033b97c1" in result.output

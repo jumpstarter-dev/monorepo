@@ -484,9 +484,13 @@ func setExporterOnlineConditions(ctx context.Context, name string, status metav1
 	if status == metav1.ConditionTrue {
 		exporter.Status.Devices = []jumpstarterdevv1alpha1.Device{{}}
 		exporter.Status.LastSeen = metav1.Now()
+		exporter.Status.ExporterStatusValue = jumpstarterdevv1alpha1.ExporterStatusAvailable
+		exporter.Status.StatusMessage = "Available for leasing"
 	} else {
 		exporter.Status.Devices = nil
 		exporter.Status.LastSeen = metav1.NewTime(metav1.Now().Add(-time.Minute * 2))
+		exporter.Status.ExporterStatusValue = jumpstarterdevv1alpha1.ExporterStatusOffline
+		exporter.Status.StatusMessage = "Offline"
 	}
 	Expect(k8sClient.Status().Update(ctx, exporter)).To(Succeed())
 }
@@ -1661,9 +1665,9 @@ var _ = Describe("Scheduled Leases", func() {
 			ctx := context.Background()
 
 			// Give lease1 an earlier BeginTime to ensure deterministic ordering
-			// Stagger them closely so both BeginTimes will have passed by the time we check lease2
+			// Use a larger gap (500ms) to avoid race conditions in CI environments
 			lease1BeginTime := metav1.NewTime(time.Now().Truncate(time.Second).Add(1 * time.Second))
-			lease2BeginTime := metav1.NewTime(time.Now().Truncate(time.Second).Add(1*time.Second + 100*time.Millisecond))
+			lease2BeginTime := metav1.NewTime(time.Now().Truncate(time.Second).Add(1*time.Second + 500*time.Millisecond))
 
 			// Both leases target dut:b (only one exporter available)
 			lease1 := leaseDutA2Sec.DeepCopy()

@@ -21,8 +21,8 @@ def get():
 @opt_output_all
 @opt_comma_separated(
     "with",
-    {"leases", "online"},
-    help_text="Include fields: leases, online (comma-separated or repeated)"
+    {"leases", "online", "status"},
+    help_text="Include fields: leases, online, status (comma-separated or repeated)",
 )
 @handle_exceptions_with_reauthentication(relogin_client)
 def get_exporters(config, selector: str | None, output: OutputType, with_options: list[str]):
@@ -32,7 +32,10 @@ def get_exporters(config, selector: str | None, output: OutputType, with_options
 
     include_leases = "leases" in with_options
     include_online = "online" in with_options
-    exporters = config.list_exporters(filter=selector, include_leases=include_leases, include_online=include_online)
+    include_status = "status" in with_options
+    exporters = config.list_exporters(
+        filter=selector, include_leases=include_leases, include_online=include_online, include_status=include_status
+    )
 
     model_print(exporters, output)
 

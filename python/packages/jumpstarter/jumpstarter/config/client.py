@@ -94,6 +94,12 @@ class ClientConfigV1Alpha1Lease(BaseSettings):
         description="Timeout in seconds for lease acquisition",
         ge=5,  # Must be at least 5 seconds (polling interval)
     )
+    dial_timeout: float = Field(
+        default=30.0,
+        description="Timeout in seconds for Dial retry loop when exporter not ready",
+        gt=0,
+        exclude=True,  # Internal field, not serialized to config files
+    )
 
 
 class ClientConfigV1Alpha1(BaseSettings):
@@ -120,7 +126,7 @@ class ClientConfigV1Alpha1(BaseSettings):
 
     leases: ClientConfigV1Alpha1Lease = Field(default_factory=ClientConfigV1Alpha1Lease)
 
-    async def channel(self):
+    async def channel(self) -> grpc.aio.Channel:
         if self.endpoint is None or self.token is None:
             raise ConfigurationError("endpoint or token not set in client config")
 
@@ -160,12 +166,14 @@ class ClientConfigV1Alpha1(BaseSettings):
         filter: str | None = None,
         include_leases: bool = False,
         include_online: bool = False,
+        include_status: bool = False,
     ):
         svc = ClientService(channel=await self.channel(), namespace=self.metadata.namespace)
         exporters_response = await svc.ListExporters(page_size=page_size, page_token=page_token, filter=filter)
 
-        # Set the include_online flag for display purposes
+        # Set the include flags for display purposes
         exporters_response.include_online = include_online
+        exporters_response.include_status = include_status
 
         if not include_leases:
             return exporters_response
@@ -285,6 +293,7 @@ class ClientConfigV1Alpha1(BaseSettings):
                 tls_config=self.tls,
                 grpc_options=self.grpcOptions,
                 acquisition_timeout=acquisition_timeout_seconds,
+                dial_timeout=self.leases.dial_timeout,
             ) as lease:
                 yield lease
 

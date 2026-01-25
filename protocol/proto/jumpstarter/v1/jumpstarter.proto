@@ -119,6 +119,7 @@ message AuditStreamRequest {
 message ReportStatusRequest {
   ExporterStatus status = 1;
   optional string message = 2;  // Optional human-readable status message
+  optional bool release_lease = 3;  // When true, controller should release the active lease
 }
 
 message ReportStatusResponse {}
@@ -133,6 +134,10 @@ service ExporterService {
   rpc LogStream(google.protobuf.Empty) returns (stream LogStreamResponse);
   rpc Reset(ResetRequest) returns (ResetResponse);
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  // End the current session, triggering the afterLease hook
+  // The client should keep the connection open to receive hook logs via LogStream
+  // Returns after the afterLease hook completes
+  rpc EndSession(EndSessionRequest) returns (EndSessionResponse);
 }
 
 message GetReportResponse {
@@ -222,5 +227,14 @@ message GetStatusRequest {}
 
 message GetStatusResponse {
   ExporterStatus status = 1;
+  optional string message = 2;
+  uint64 status_version = 3;           // Monotonic counter, increments on each status change
+  optional ExporterStatus previous_status = 4;  // Previous status for transition tracking
+}
+
+message EndSessionRequest {}
+
+message EndSessionResponse {
+  bool success = 1;
   optional string message = 2;
 }

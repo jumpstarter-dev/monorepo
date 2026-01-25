@@ -572,6 +572,11 @@ class ExporterServiceStub(object):
                 request_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusRequest.SerializeToString,
                 response_deserializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusResponse.FromString,
                 _registered_method=True)
+        self.EndSession = channel.unary_unary(
+                '/jumpstarter.v1.ExporterService/EndSession',
+                request_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.EndSessionRequest.SerializeToString,
+                response_deserializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.EndSessionResponse.FromString,
+                _registered_method=True)
 
 
 class ExporterServiceServicer(object):
@@ -616,6 +621,15 @@ class ExporterServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def EndSession(self, request, context):
+        """End the current session, triggering the afterLease hook
+        The client should keep the connection open to receive hook logs via LogStream
+        Returns after the afterLease hook completes
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ExporterServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -648,6 +662,11 @@ def add_ExporterServiceServicer_to_server(servicer, server):
                     servicer.GetStatus,
                     request_deserializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusRequest.FromString,
                     response_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusResponse.SerializeToString,
+            ),
+            'EndSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.EndSession,
+                    request_deserializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.EndSessionRequest.FromString,
+                    response_serializer=jumpstarter_dot_v1_dot_jumpstarter__pb2.EndSessionResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -814,6 +833,33 @@ class ExporterService(object):
             '/jumpstarter.v1.ExporterService/GetStatus',
             jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusRequest.SerializeToString,
             jumpstarter_dot_v1_dot_jumpstarter__pb2.GetStatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def EndSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/jumpstarter.v1.ExporterService/EndSession',
+            jumpstarter_dot_v1_dot_jumpstarter__pb2.EndSessionRequest.SerializeToString,
+            jumpstarter_dot_v1_dot_jumpstarter__pb2.EndSessionResponse.FromString,
             options,
             channel_credentials,
             insecure,

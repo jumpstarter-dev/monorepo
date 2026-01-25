@@ -234,7 +234,9 @@ EXPORTER_JSON = """{{
             "name": "{name}-credential"
         }},
         "devices": [],
-        "endpoint": "{endpoint}"
+        "endpoint": "{endpoint}",
+        "exporterStatus": null,
+        "statusMessage": null
     }}
 }}
 """.format(name=EXPORTER_NAME, endpoint=EXPORTER_ENDPOINT)
@@ -250,6 +252,8 @@ status:
     name: {name}-credential
   devices: []
   endpoint: {endpoint}
+  exporterStatus: null
+  statusMessage: null
 
 """.format(name=EXPORTER_NAME, endpoint=EXPORTER_ENDPOINT)
 

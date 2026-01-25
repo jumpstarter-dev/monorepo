@@ -52,6 +52,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -209,6 +210,191 @@ func (s *ControllerService) Unregister(
 	logger.Info("exporter unregistered, updated as unavailable")
 
 	return &pb.UnregisterResponse{}, nil
+}
+
+func (s *ControllerService) ReportStatus(
+	ctx context.Context,
+	req *pb.ReportStatusRequest,
+) (*pb.ReportStatusResponse, error) {
+	logger := log.FromContext(ctx)
+
+	exporter, err := s.authenticateExporter(ctx)
+	if err != nil {
+		logger.Info("unable to authenticate exporter", "error", err.Error())
+		return nil, err
+	}
+
+	logger = logger.WithValues("exporter", types.NamespacedName{
+		Namespace: exporter.Namespace,
+		Name:      exporter.Name,
+	})
+
+	// Convert proto enum to CRD string value
+	exporterStatus := protoStatusToString(req.Status)
+
+	logger.Info("Exporter reporting status", "state", exporterStatus, "message", req.GetMessage())
+
+	original := client.MergeFrom(exporter.DeepCopy())
+
+	exporter.Status.ExporterStatusValue = exporterStatus
+	exporter.Status.StatusMessage = req.GetMessage()
+	// Also update LastSeen to keep the exporter marked as online
+	exporter.Status.LastSeen = metav1.Now()
+
+	// Sync the Online condition with the reported status for consistency
+	// This ensures the deprecated Online boolean field stays consistent with ExporterStatusValue
+	syncOnlineConditionWithStatus(exporter)
+
+	if err := s.Client.Status().Patch(ctx, exporter, original); err != nil {
+		logger.Error(err, "unable to update exporter status")
+		return nil, status.Errorf(codes.Internal, "unable to update exporter status: %s", err)
+	}
+
+	// Handle lease release request from exporter
+	// This allows the exporter to signal that the lease should be released after
+	// the afterLease hook completes, ensuring leases are always released even if
+	// the client disconnects unexpectedly.
+	if req.GetReleaseLease() {
+		if err := s.handleExporterLeaseRelease(ctx, exporter); err != nil {
+			logger.Error(err, "failed to release lease for exporter")
+			// Don't fail the status report, just log the error
+			// The client can still release the lease as a fallback
+		}
+	}
+
+	return &pb.ReportStatusResponse{}, nil
+}
+
+// handleExporterLeaseRelease handles a lease release request from an exporter.
+// This is called when the exporter sets release_lease=true in ReportStatus,
+// typically after the afterLease hook completes.
+func (s *ControllerService) handleExporterLeaseRelease(
+	ctx context.Context,
+	exporter *jumpstarterdevv1alpha1.Exporter,
+) error {
+	logger := log.FromContext(ctx)
+
+	// Check if exporter has an active lease
+	if exporter.Status.LeaseRef == nil {
+		logger.Info("No active lease to release for exporter")
+		return nil
+	}
+
+	// Get the lease
+	var lease jumpstarterdevv1alpha1.Lease
+	if err := s.Client.Get(ctx, types.NamespacedName{
+		Namespace: exporter.Namespace,
+		Name:      exporter.Status.LeaseRef.Name,
+	}, &lease); err != nil {
+		return fmt.Errorf("failed to get lease: %w", err)
+	}
+
+	// Verify the lease is actually held by this exporter
+	if lease.Status.ExporterRef == nil || lease.Status.ExporterRef.Name != exporter.Name {
+		return fmt.Errorf("lease %s is not held by exporter %s", lease.Name, exporter.Name)
+	}
+
+	// Check if lease is already ended or marked for release
+	if lease.Status.Ended || lease.Spec.Release {
+		logger.Info("Lease already ended or marked for release", "lease", lease.Name)
+		return nil
+	}
+
+	// Set the release flag to trigger lease end via the reconciler
+	original := client.MergeFrom(lease.DeepCopy())
+	lease.Spec.Release = true
+
+	if err := s.Client.Patch(ctx, &lease, original); err != nil {
+		return fmt.Errorf("failed to mark lease for release: %w", err)
+	}
+
+	logger.Info("Lease marked for release by exporter",
+		"lease", lease.Name,
+		"exporter", exporter.Name)
+
+	return nil
+}
+
+// protoStatusToString converts the proto ExporterStatus enum to the CRD string value
+func protoStatusToString(status pb.ExporterStatus) string {
+	switch status {
+	case pb.ExporterStatus_EXPORTER_STATUS_OFFLINE:
+		return jumpstarterdevv1alpha1.ExporterStatusOffline
+	case pb.ExporterStatus_EXPORTER_STATUS_AVAILABLE:
+		return jumpstarterdevv1alpha1.ExporterStatusAvailable
+	case pb.ExporterStatus_EXPORTER_STATUS_BEFORE_LEASE_HOOK:
+		return jumpstarterdevv1alpha1.ExporterStatusBeforeLeaseHook
+	case pb.ExporterStatus_EXPORTER_STATUS_LEASE_READY:
+		return jumpstarterdevv1alpha1.ExporterStatusLeaseReady
+	case pb.ExporterStatus_EXPORTER_STATUS_AFTER_LEASE_HOOK:
+		return jumpstarterdevv1alpha1.ExporterStatusAfterLeaseHook
+	case pb.ExporterStatus_EXPORTER_STATUS_BEFORE_LEASE_HOOK_FAILED:
+		return jumpstarterdevv1alpha1.ExporterStatusBeforeLeaseHookFailed
+	case pb.ExporterStatus_EXPORTER_STATUS_AFTER_LEASE_HOOK_FAILED:
+		return jumpstarterdevv1alpha1.ExporterStatusAfterLeaseHookFailed
+	default:
+		return jumpstarterdevv1alpha1.ExporterStatusUnspecified
+	}
+}
+
+// syncOnlineConditionWithStatus updates the Online condition based on ExporterStatusValue.
+// This ensures the deprecated Online boolean field in the protobuf API stays consistent
+// with the new ExporterStatusValue field.
+func syncOnlineConditionWithStatus(exporter *jumpstarterdevv1alpha1.Exporter) {
+	isOnline := exporter.Status.ExporterStatusValue != jumpstarterdevv1alpha1.ExporterStatusOffline &&
+		exporter.Status.ExporterStatusValue != jumpstarterdevv1alpha1.ExporterStatusUnspecified &&
+		exporter.Status.ExporterStatusValue != ""
+
+	if isOnline {
+		meta.SetStatusCondition(&exporter.Status.Conditions, metav1.Condition{
+			Type:               string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline),
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: exporter.Generation,
+			Reason:             "StatusReported",
+			Message:            fmt.Sprintf("Exporter reported status: %s", exporter.Status.ExporterStatusValue),
+		})
+	} else {
+		meta.SetStatusCondition(&exporter.Status.Conditions, metav1.Condition{
+			Type:               string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline),
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: exporter.Generation,
+			Reason:             "Offline",
+			Message:            exporter.Status.StatusMessage,
+		})
+	}
+}
+
+// checkExporterStatusForDriverCalls validates that the exporter is in a status
+// that allows driver calls. This check is performed by the controller before
+// allowing clients to dial, so we can reject immediately even if the exporter
+// is offline or in an invalid state.
+//
+// Allowed statuses:
+//   - LeaseReady: Normal operation, lease is active
+//   - BeforeLeaseHook: Hook is running, allows j commands from hooks
+//   - AfterLeaseHook: Hook is running, allows j commands from hooks
+//   - Unspecified/"": Backwards compatibility with old exporters that don't report status
+func checkExporterStatusForDriverCalls(exporterStatus string) error {
+	switch exporterStatus {
+	case jumpstarterdevv1alpha1.ExporterStatusLeaseReady,
+		jumpstarterdevv1alpha1.ExporterStatusBeforeLeaseHook,
+		jumpstarterdevv1alpha1.ExporterStatusAfterLeaseHook:
+		return nil
+	case jumpstarterdevv1alpha1.ExporterStatusUnspecified, "":
+		// Allow for backwards compatibility with old exporters that don't report status.
+		// The exporter-side check will still validate if it's a new exporter.
+		return nil
+	case jumpstarterdevv1alpha1.ExporterStatusOffline:
+		return status.Errorf(codes.FailedPrecondition, "exporter is offline")
+	case jumpstarterdevv1alpha1.ExporterStatusAvailable:
+		return status.Errorf(codes.FailedPrecondition, "exporter is not ready (status: Available)")
+	case jumpstarterdevv1alpha1.ExporterStatusBeforeLeaseHookFailed:
+		return status.Errorf(codes.FailedPrecondition, "exporter beforeLease hook failed")
+	case jumpstarterdevv1alpha1.ExporterStatusAfterLeaseHookFailed:
+		return status.Errorf(codes.FailedPrecondition, "exporter afterLease hook failed")
+	default:
+		return status.Errorf(codes.FailedPrecondition, "exporter not ready (status: %s)", exporterStatus)
+	}
 }
 
 func (s *ControllerService) Listen(req *pb.ListenRequest, stream pb.ControllerService_ListenServer) error {
@@ -443,6 +629,16 @@ func (s *ControllerService) Dial(ctx context.Context, req *pb.DialRequest) (*pb.
 	if err := s.Client.Get(ctx,
 		types.NamespacedName{Namespace: client.Namespace, Name: lease.Status.ExporterRef.Name}, &exporter); err != nil {
 		logger.Error(err, "unable to get exporter referenced by lease")
+		return nil, err
+	}
+
+	// Check if exporter status allows driver calls
+	// This validates before the client connects, so we can reject immediately
+	// even if the exporter is offline or in an invalid state
+	if err := checkExporterStatusForDriverCalls(exporter.Status.ExporterStatusValue); err != nil {
+		logger.Info("Dial rejected due to exporter status",
+			"status", exporter.Status.ExporterStatusValue,
+			"error", err.Error())
 		return nil, err
 	}
 

@@ -5,7 +5,6 @@ from collections import OrderedDict
 from dataclasses import InitVar, dataclass, field
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
 
 from google.protobuf import duration_pb2, field_mask_pb2, json_format, timestamp_pb2
 from grpc import ChannelConnectivity
@@ -13,6 +12,7 @@ from grpc.aio import Channel
 from jumpstarter_protocol import client_pb2, client_pb2_grpc, jumpstarter_pb2_grpc, kubernetes_pb2, router_pb2_grpc
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from jumpstarter.common import ExporterStatus
 from jumpstarter.common.grpc import translate_grpc_exceptions
 
 
@@ -20,6 +20,7 @@ from jumpstarter.common.grpc import translate_grpc_exceptions
 class WithOptions:
     show_online: bool = False
     show_leases: bool = False
+    show_status: bool = False
 
 
 def add_display_columns(table, options: WithOptions = None):
@@ -28,6 +29,8 @@ def add_display_columns(table, options: WithOptions = None):
     table.add_column("NAME")
     if options.show_online:
         table.add_column("ONLINE")
+    if options.show_status:
+        table.add_column("STATUS")
     table.add_column("LABELS")
     if options.show_leases:
         table.add_column("LEASED BY")
@@ -42,6 +45,9 @@ def add_exporter_row(table, exporter, options: WithOptions = None, lease_info: t
     row_data.append(exporter.name)
     if options.show_online:
         row_data.append("yes" if exporter.online else "no")
+    if options.show_status:
+        status_str = str(exporter.status) if exporter.status else "UNKNOWN"
+        row_data.append(status_str)
     row_data.append(",".join(("{}={}".format(k, v) for k, v in sorted(exporter.labels.items()))))
     if options.show_leases:
         if lease_info:
@@ -81,12 +87,16 @@ class Exporter(BaseModel):
     name: str
     labels: dict[str, str]
     online: bool = False
+    status: ExporterStatus | None = None
     lease: Lease | None = None
 
     @classmethod
     def from_protobuf(cls, data: client_pb2.Exporter) -> Exporter:
         namespace, name = parse_exporter_identifier(data.name)
-        return cls(namespace=namespace, name=name, labels=data.labels, online=data.online)
+        status = None
+        if hasattr(data, "status") and data.status:
+            status = ExporterStatus.from_proto(data.status)
+        return cls(namespace=namespace, name=name, labels=data.labels, online=data.online, status=status)
 
     @classmethod
     def rich_add_columns(cls, table, options: WithOptions = None):
@@ -244,6 +254,7 @@ class ExporterList(BaseModel):
     next_page_token: str | None = Field(exclude=True)
     include_online: bool = Field(default=False, exclude=True)
     include_leases: bool = Field(default=False, exclude=True)
+    include_status: bool = Field(default=False, exclude=True)
 
     @classmethod
     def from_protobuf(cls, data: client_pb2.ListExportersResponse) -> ExporterList:
@@ -253,11 +264,15 @@ class ExporterList(BaseModel):
         )
 
     def rich_add_columns(self, table):
-        options = WithOptions(show_online=self.include_online, show_leases=self.include_leases)
+        options = WithOptions(
+            show_online=self.include_online, show_leases=self.include_leases, show_status=self.include_status
+        )
         Exporter.rich_add_columns(table, options)
 
     def rich_add_rows(self, table):
-        options = WithOptions(show_online=self.include_online, show_leases=self.include_leases)
+        options = WithOptions(
+            show_online=self.include_online, show_leases=self.include_leases, show_status=self.include_status
+        )
         for exporter in self.exporters:
             exporter.rich_add_rows(table, options)
 
@@ -274,6 +289,8 @@ class ExporterList(BaseModel):
             exclude_fields.add("lease")
         if not self.include_online:
             exclude_fields.add("online")
+        if not self.include_status:
+            exclude_fields.add("status")
 
         data = {"exporters": [exporter.model_dump(mode="json", exclude=exclude_fields) for exporter in self.exporters]}
         return json.dumps(data, **json_kwargs)
@@ -284,6 +301,8 @@ class ExporterList(BaseModel):
             exclude_fields.add("lease")
         if not self.include_online:
             exclude_fields.add("online")
+        if not self.include_status:
+            exclude_fields.add("status")
 
         return {"exporters": [exporter.model_dump(mode="json", exclude=exclude_fields) for exporter in self.exporters]}
 
@@ -469,7 +488,7 @@ class MultipathExporterStub:
 
     channels: InitVar[list[Channel]]
 
-    __stubs: dict[Channel, Any] = field(init=False, default_factory=OrderedDict)
+    __stubs: dict[Channel, SimpleNamespace] = field(init=False, default_factory=OrderedDict)
 
     def __post_init__(self, channels):
         for channel in channels:

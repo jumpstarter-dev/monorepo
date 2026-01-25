@@ -1,0 +1,12 @@
+export:
+  power:
+    type: jumpstarter_driver_power.driver.MockPower
+  storage:
+    type: jumpstarter_driver_opendal.driver.MockStorageMux
+
+hooks:
+  afterLease:
+    script: |
+      echo "AFTER_HOOK_MARKER: executed"
+    timeout: 60
+    onFailure: warn

@@ -27,7 +27,7 @@ from .decorators import (
     MARKER_STREAMCALL,
     MARKER_STREAMING_DRIVERCALL,
 )
-from jumpstarter.common import Metadata
+from jumpstarter.common import LogSource, Metadata
 from jumpstarter.common.resources import ClientStreamResource, PresignedRequestResource, Resource, ResourceMetadata
 from jumpstarter.common.serde import decode_value, encode_value
 from jumpstarter.common.streams import (
@@ -35,6 +35,7 @@ from jumpstarter.common.streams import (
     ResourceStreamRequest,
 )
 from jumpstarter.config.env import JMP_DISABLE_COMPRESSION
+from jumpstarter.exporter.logging import get_logger
 from jumpstarter.streams.aiohttp import AiohttpStreamReaderStream
 from jumpstarter.streams.common import create_memory_stream
 from jumpstarter.streams.encoding import Compression, compress_stream
@@ -86,7 +87,7 @@ class Driver(
         if hasattr(super(), "__post_init__"):
             super().__post_init__()
 
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = get_logger(f"driver.{self.__class__.__name__}", LogSource.DRIVER)
         self.logger.setLevel(self.log_level)
 
     def close(self):
