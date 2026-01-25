@@ -314,6 +314,34 @@ class TestStatusMonitorWaitForStatus:
         assert result is False
         assert monitor.connection_lost
 
+    async def test_wait_for_status_unimplemented_returns_promptly(self) -> None:
+        """Test wait_for_status returns promptly when UNIMPLEMENTED is received.
+
+        When GetStatus returns UNIMPLEMENTED (old exporter without status support),
+        the monitor should signal waiters so they don't hang indefinitely.
+        """
+        # First return AVAILABLE, then UNIMPLEMENTED to simulate an old exporter
+        responses = [
+            create_status_response(ExporterStatus.AVAILABLE, version=1),
+            create_mock_rpc_error(StatusCode.UNIMPLEMENTED),
+        ]
+        stub = MockExporterStub(responses)
+        monitor = StatusMonitor(stub, poll_interval=0.05)
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+
+            # Wait for a status that will never be reached - should return promptly
+            # when UNIMPLEMENTED is received, not hang until timeout
+            result = await monitor.wait_for_status(ExporterStatus.LEASE_READY, timeout=2.0)
+
+            await monitor.stop()
+
+        # Should return False promptly (well before the 2s timeout)
+        assert result is False
+        # Monitor should have stopped running
+        assert not monitor._running
+
 
 class TestStatusMonitorWaitForAnyOf:
     async def test_wait_for_any_of_already_at_target(self) -> None:
@@ -383,6 +411,35 @@ class TestStatusMonitorWaitForAnyOf:
             await monitor.stop()
 
         assert result is None
+
+    async def test_wait_for_any_of_unimplemented_returns_promptly(self) -> None:
+        """Test wait_for_any_of returns promptly when UNIMPLEMENTED is received.
+
+        When GetStatus returns UNIMPLEMENTED (old exporter without status support),
+        the monitor should signal waiters so they don't hang indefinitely.
+        """
+        # First return AVAILABLE, then UNIMPLEMENTED to simulate an old exporter
+        responses = [
+            create_status_response(ExporterStatus.AVAILABLE, version=1),
+            create_mock_rpc_error(StatusCode.UNIMPLEMENTED),
+        ]
+        stub = MockExporterStub(responses)
+        monitor = StatusMonitor(stub, poll_interval=0.05)
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+
+            # Wait for statuses that will never be reached - should return promptly
+            # when UNIMPLEMENTED is received, not hang until timeout
+            targets = [ExporterStatus.LEASE_READY, ExporterStatus.AFTER_LEASE_HOOK]
+            result = await monitor.wait_for_any_of(targets, timeout=2.0)
+
+            await monitor.stop()
+
+        # Should return None promptly (well before the 2s timeout)
+        assert result is None
+        # Monitor should have stopped running
+        assert not monitor._running
 
 
 class TestStatusMonitorLifecycle:

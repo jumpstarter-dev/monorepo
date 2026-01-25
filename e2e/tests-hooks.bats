@@ -177,7 +177,7 @@ exporter_process_running() {
 @test "hooks A1: beforeLease hook executes" {
   start_hooks_exporter "exporter-hooks-before-only.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   assert_success
   assert_output --partial "BEFORE_HOOK_MARKER: executed"
@@ -186,7 +186,7 @@ exporter_process_running() {
 @test "hooks A2: afterLease hook executes" {
   start_hooks_exporter "exporter-hooks-after-only.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   assert_success
   assert_output --partial "AFTER_HOOK_MARKER: executed"
@@ -195,7 +195,7 @@ exporter_process_running() {
 @test "hooks A3: both hooks execute in correct order" {
   start_hooks_exporter "exporter-hooks-both.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   assert_success
   assert_output --partial "BEFORE_HOOK:"
@@ -215,7 +215,7 @@ exporter_process_running() {
 @test "hooks B1: beforeLease onFailure=warn allows shell to proceed" {
   start_hooks_exporter "exporter-hooks-before-fail-warn.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   # Shell should succeed despite hook failure
   assert_success
@@ -228,7 +228,7 @@ exporter_process_running() {
 @test "hooks B2: beforeLease onFailure=endLease fails shell" {
   start_hooks_exporter "exporter-hooks-before-fail-endLease.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   # Shell should fail because lease was ended
   assert_failure
@@ -241,7 +241,7 @@ exporter_process_running() {
 @test "hooks B3: beforeLease onFailure=exit shuts down exporter" {
   start_hooks_exporter_single "exporter-hooks-before-fail-exit.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   # Shell should fail
   assert_failure
@@ -263,7 +263,7 @@ exporter_process_running() {
 @test "hooks C1: afterLease onFailure=warn keeps exporter available" {
   start_hooks_exporter "exporter-hooks-after-fail-warn.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   # Shell should succeed (afterLease runs after shell completes)
   assert_success
@@ -276,7 +276,7 @@ exporter_process_running() {
 @test "hooks C2: afterLease onFailure=exit shuts down exporter" {
   start_hooks_exporter_single "exporter-hooks-after-fail-exit.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   # Shell command itself should succeed
   assert_success
@@ -298,7 +298,7 @@ exporter_process_running() {
 @test "hooks D1: beforeLease timeout is treated as failure" {
   start_hooks_exporter "exporter-hooks-timeout.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   # Hook should timeout but shell proceeds (onFailure=warn)
   assert_success
@@ -315,7 +315,7 @@ exporter_process_running() {
 @test "hooks E1: beforeLease can use j power on" {
   start_hooks_exporter "exporter-hooks-both.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   assert_success
   assert_output --partial "BEFORE_HOOK: complete"
@@ -325,7 +325,7 @@ exporter_process_running() {
 @test "hooks E2: afterLease can use j power off" {
   start_hooks_exporter "exporter-hooks-both.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   assert_success
   assert_output --partial "AFTER_HOOK: complete"
@@ -335,7 +335,7 @@ exporter_process_running() {
 @test "hooks E3: environment variables are available in hooks" {
   start_hooks_exporter "exporter-hooks-both.yaml"
 
-  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power status
+  run jmp shell --client test-client-hooks --selector example.com/board=hooks j power on
 
   assert_success
   # LEASE_NAME and CLIENT_NAME should be set (not empty)

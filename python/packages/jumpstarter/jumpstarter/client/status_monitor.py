@@ -343,7 +343,11 @@ class StatusMonitor:
             except AioRpcError as e:
                 if e.code() == StatusCode.UNIMPLEMENTED:
                     # GetStatus not implemented - old exporter, stop polling
-                    logger.debug("GetStatus not implemented, stopping monitor")
+                    logger.debug("GetStatus not implemented, stopping monitor and signaling waiters")
+                    self._running = False
+                    # Fire the change event to wake up any waiters
+                    self._any_change_event.set()
+                    self._any_change_event = Event()
                     break
                 elif e.code() == StatusCode.UNAVAILABLE:
                     # Connection lost - exporter closed or restarted

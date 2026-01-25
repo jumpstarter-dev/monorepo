@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import (
     ExitStack,
@@ -54,6 +55,7 @@ class Lease(ContextManagerMixin, AsyncContextManagerMixin):
     tls_config: TLSConfigV1Alpha1 = field(default_factory=TLSConfigV1Alpha1)
     grpc_options: dict[str, Any] = field(default_factory=dict)
     acquisition_timeout: int = field(default=7200)  # Timeout in seconds for lease acquisition, polled in 5s intervals
+    dial_timeout: float = field(default=30.0)  # Timeout in seconds for Dial retry loop when exporter not ready
     exporter_name: str = field(default="remote", init=False)  # Populated during acquisition
     lease_ending_callback: Callable[[Self, timedelta], None] | None = field(
         default=None, init=False
@@ -237,23 +239,32 @@ class Lease(ContextManagerMixin, AsyncContextManagerMixin):
         # Retry Dial with exponential backoff for transient "exporter not ready" errors.
         # This handles the race condition where the client acquires a lease before
         # the exporter has transitioned to LEASE_READY status.
-        max_retries = 15
+        # Uses time-based retry bounded by dial_timeout instead of fixed retry count.
         base_delay = 0.3
         max_delay = 2.0
-        for attempt in range(max_retries):
+        deadline = time.monotonic() + self.dial_timeout
+        attempt = 0
+        while True:
             try:
                 response = await self.controller.Dial(jumpstarter_pb2.DialRequest(lease_name=self.name))
                 break
             except AioRpcError as e:
                 if e.code() == grpc.StatusCode.FAILED_PRECONDITION and "not ready" in str(e.details()):
-                    if attempt < max_retries - 1:
-                        delay = min(base_delay * (2 ** attempt), max_delay)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         logger.debug(
-                            "Exporter not ready, retrying Dial in %.1fs (attempt %d/%d)",
-                            delay, attempt + 1, max_retries
+                            "Exporter not ready and dial timeout (%.1fs) exceeded after %d attempts",
+                            self.dial_timeout, attempt + 1
                         )
-                        await sleep(delay)
-                        continue
+                        raise
+                    delay = min(base_delay * (2 ** attempt), max_delay, remaining)
+                    logger.debug(
+                        "Exporter not ready, retrying Dial in %.1fs (attempt %d, %.1fs remaining)",
+                        delay, attempt + 1, remaining
+                    )
+                    await sleep(delay)
+                    attempt += 1
+                    continue
                 raise
         async with connect_router_stream(
             response.router_endpoint, response.router_token, stream, self.tls_config, self.grpc_options

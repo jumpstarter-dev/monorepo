@@ -94,6 +94,11 @@ class ClientConfigV1Alpha1Lease(BaseSettings):
         description="Timeout in seconds for lease acquisition",
         ge=5,  # Must be at least 5 seconds (polling interval)
     )
+    dial_timeout: float = Field(
+        default=30.0,
+        description="Timeout in seconds for Dial retry loop when exporter not ready",
+        gt=0,
+    )
 
 
 class ClientConfigV1Alpha1(BaseSettings):
@@ -287,6 +292,7 @@ class ClientConfigV1Alpha1(BaseSettings):
                 tls_config=self.tls,
                 grpc_options=self.grpcOptions,
                 acquisition_timeout=acquisition_timeout_seconds,
+                dial_timeout=self.leases.dial_timeout,
             ) as lease:
                 yield lease
 
