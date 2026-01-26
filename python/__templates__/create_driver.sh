@@ -32,15 +32,19 @@ else
     sed_cmd="sed -i"
 fi
 
+# Get the script directory and navigate to python/ root
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PYTHON_ROOT="$( cd "${SCRIPT_DIR}/.." && pwd )"
+
 # create the driver directory
-DRIVER_DIRECTORY=packages/jumpstarter-driver-${DRIVER_NAME}
+DRIVER_DIRECTORY=${PYTHON_ROOT}/packages/jumpstarter-driver-${DRIVER_NAME}
 MODULE_DIRECTORY=${DRIVER_DIRECTORY}/jumpstarter_driver_${DRIVER_MODULE_NAME}
 # create the module directories
 mkdir -p ${MODULE_DIRECTORY}
 mkdir -p ${DRIVER_DIRECTORY}/examples
 
 # Define paths
-DOCS_DIRECTORY=docs/source/reference/package-apis/drivers
+DOCS_DIRECTORY=${PYTHON_ROOT}/docs/source/reference/package-apis/drivers
 DOC_FILE=${DOCS_DIRECTORY}/${DRIVER_NAME}.md
 README_FILE=${DRIVER_DIRECTORY}/README.md
 
@@ -87,10 +91,10 @@ echo "Created symlink: ${DOC_FILE} -> ${rel_path}"
 
 for f in __init__.py client.py driver_test.py driver.py; do
     echo "Creating: ${MODULE_DIRECTORY}/${f}"
-    envsubst < __templates__/driver/jumpstarter_driver/${f}.tmpl > ${MODULE_DIRECTORY}/${f}
+    envsubst < ${SCRIPT_DIR}/driver/jumpstarter_driver/${f}.tmpl > ${MODULE_DIRECTORY}/${f}
 done
 
 for f in .gitignore pyproject.toml examples/exporter.yaml; do
     echo "Creating: ${DRIVER_DIRECTORY}/${f}"
-    envsubst < __templates__/driver/${f}.tmpl > ${DRIVER_DIRECTORY}/${f}
+    envsubst < ${SCRIPT_DIR}/driver/${f}.tmpl > ${DRIVER_DIRECTORY}/${f}
 done

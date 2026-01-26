@@ -1,0 +1,185 @@
+---
+description: when the user is modifying the Kubernetes operator, CRDs, or controller logic
+---
+
+# Working with the Jumpstarter Operator
+
+The Jumpstarter operator is a Kubernetes operator that manages Jumpstarter deployments. It is located in `controller/deploy/operator/`.
+
+## Directory Structure
+
+```
+controller/
+├── deploy/
+│   ├── operator/                    # Operator code
+│   │   ├── api/v1alpha1/           # CRD type definitions
+│   │   │   └── jumpstarter_types.go # Main types file
+│   │   ├── internal/controller/     # Controller logic
+│   │   │   └── jumpstarter/
+│   │   │       ├── jumpstarter_controller.go  # Main reconciler
+│   │   │       ├── endpoints/       # Endpoint handling (routes, ingress, etc.)
+│   │   │       └── rbac.go          # RBAC reconciliation
+│   │   ├── config/                  # Kustomize configurations
+│   │   │   ├── crd/bases/          # Generated CRD YAML
+│   │   │   └── samples/            # Sample CR files
+│   │   ├── bundle/                  # OLM bundle manifests
+│   │   ├── test/e2e/               # E2E tests
+│   │   └── Makefile                # Operator-specific make targets
+│   └── helm/                       # Helm charts (alternative deployment)
+├── api/                            # Jumpstarter core CRDs (Client, Exporter, Lease, etc.)
+├── internal/                       # Controller business logic
+│   └── config/                     # Config structs used by controller
+└── Makefile                        # Top-level controller make targets
+```
+
+## Key Files
+
+- **`api/v1alpha1/jumpstarter_types.go`**: Defines the `Jumpstarter` CRD spec and status
+- **`internal/controller/jumpstarter/jumpstarter_controller.go`**: Main reconciliation logic
+- **`internal/controller/jumpstarter/jumpstarter_controller.go:buildConfig()`**: Translates CRD spec to internal config format for ConfigMaps
+
+## Development Workflow
+
+### After Modifying CRD Types
+
+When you change `jumpstarter_types.go`, you MUST regenerate code:
+
+```bash
+cd controller/deploy/operator
+make manifests generate
+```
+
+This will:
+1. Regenerate CRD YAML in `config/crd/bases/`
+2. Regenerate `DeepCopy` methods in `zz_generated.deepcopy.go`
+
+### Building
+
+```bash
+# Build operator binary
+cd controller/deploy/operator
+make build
+
+# Build container image
+make docker-build
+```
+
+### Running Tests
+
+```bash
+# Unit tests (from operator directory)
+cd controller/deploy/operator
+make test
+
+# E2E tests (from controller directory - sets up kind cluster)
+cd controller
+make test-operator-e2e
+```
+
+### Regenerating OLM Bundle
+
+After CRD changes, regenerate the OLM bundle:
+
+```bash
+cd controller/deploy/operator
+make bundle
+```
+
+## CRD Schema Guidelines
+
+### Adding New Fields
+
+1. Add the field to the appropriate struct in `jumpstarter_types.go`
+2. Use kubebuilder markers for validation and defaults:
+   ```go
+   // +kubebuilder:default="value"
+   // +kubebuilder:validation:Pattern=^[a-z]+$
+   // +kubebuilder:validation:Minimum=1
+   FieldName string `json:"fieldName,omitempty"`
+   ```
+3. Add documentation comments (they become CRD descriptions)
+4. Run `make manifests generate`
+
+### Field Location Conventions
+
+- **Top-level spec fields**: Global settings (baseDomain, useCertManager, authentication)
+- **Controller config**: Controller-specific settings (image, replicas, grpc endpoints)
+- **Router config**: Router-specific settings (image, replicas, topology constraints)
+
+### Example: Authentication Config
+
+Authentication is configured at the **controller level** (not top-level) because it's specific to controller behavior:
+
+```yaml
+spec:
+  controller:
+    authentication:
+      internal:
+        enabled: true
+        prefix: "internal:"
+      k8s:
+        enabled: false
+      jwt: []
+```
+
+## Controller Logic
+
+### The Reconcile Loop
+
+The main reconciler in `jumpstarter_controller.go` follows this order:
+
+1. Fetch the Jumpstarter CR
+2. Apply runtime defaults (via `EndpointReconciler.ApplyDefaults`)
+3. Reconcile RBAC (ServiceAccount, Role, RoleBinding)
+4. Reconcile Controller Deployment
+5. Reconcile Router Deployments (one per replica)
+6. Reconcile Services and networking (Routes, Ingress, NodePort, LoadBalancer)
+7. Reconcile ConfigMaps (includes controller config and router config)
+8. Reconcile Secrets (only created if missing, not updated)
+9. Update status
+
+### The buildConfig Function
+
+`buildConfig()` translates the CRD spec into the internal `config.Config` struct that gets serialized to YAML in the ConfigMap. When adding new CRD fields that affect runtime config:
+
+1. Add the field to `jumpstarter_types.go`
+2. Update `buildConfig()` to read from the new field
+3. Ensure the internal `config.Config` struct (in `controller/internal/config/`) supports the field
+
+## Testing Changes
+
+### Unit Tests
+
+Unit tests use envtest (fake Kubernetes API). They're located alongside the code:
+- `jumpstarter_controller_test.go`
+- `endpoints/*_test.go`
+
+### E2E Tests
+
+E2E tests (`test/e2e/e2e_test.go`) run against a real kind cluster:
+
+1. Deploy the operator
+2. Create Jumpstarter CRs
+3. Verify deployments, services, configmaps are created correctly
+4. Test scaling, endpoint access, etc.
+
+When modifying CRD schema, update the test YAML in `e2e_test.go` to match.
+
+## Common Issues
+
+### CRD Validation Errors
+
+If you get validation errors when applying CRs, check:
+1. kubebuilder markers match your intended constraints
+2. Default values are valid according to validation rules
+3. Run `make manifests` after any type changes
+
+### ConfigMap Not Updated
+
+The controller compares existing vs desired state. If your changes aren't reflected:
+1. Check `buildConfig()` reads from the correct spec field
+2. Verify the comparison logic in `configMapNeedsUpdate()`
+
+### Secrets Not Updated
+
+Secrets are intentionally NOT updated after creation (to preserve keys). They're also NOT owned by the CR (won't be deleted when CR is deleted). This is by design for security.

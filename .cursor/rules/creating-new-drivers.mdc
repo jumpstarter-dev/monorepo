@@ -7,7 +7,7 @@ alwaysApply: false
 When asked to create a new driver, follow these steps:
 
 ## 1. Use the Driver Creation Script
-Always use the provided script: `./__templates__/create_driver.sh`
+Always use the provided script: `./python/__templates__/create_driver.sh`
 
 ## 2. Required Information
 Before creating a driver, ask the user for:
@@ -22,24 +22,24 @@ Before creating a driver, ask the user for:
 
 ## 3. Command Format
 ```bash
-./__templates__/create_driver.sh <driver_package> <DriverClass> "<Author Name>" "<author@email.com>"
+./python/__templates__/create_driver.sh <driver_package> <DriverClass> "<Author Name>" "<author@email.com>"
 ```
 Always try to obtain the Author Name and Email from git, by checking the git configuration.
 ## 4. Examples
 ```bash
 # Network driver
-./__templates__/create_driver.sh network TcpNetwork "John Doe" "john@example.com"
+./python/__templates__/create_driver.sh network TcpNetwork "John Doe" "john@example.com"
 
 # Power management driver
-./__templates__/create_driver.sh custom-power CustomPowerDriver "Jane Smith" "jane@example.com"
+./python/__templates__/create_driver.sh custom-power CustomPowerDriver "Jane Smith" "jane@example.com"
 
 # Device control driver
-./__templates__/create_driver.sh device-controller DeviceController "Bob Wilson" "bob@example.com"
+./python/__templates__/create_driver.sh device-controller DeviceController "Bob Wilson" "bob@example.com"
 ```
 
 ## 5. After Creation
 Once the driver is created:
-1. Navigate to the new driver directory: `packages/jumpstarter-driver-<driver_package>/`
+1. Navigate to the new driver directory: `python/packages/jumpstarter-driver-<driver_package>/`
 2. Review the generated files and customize as needed
 3. Implement the driver logic in `driver.py`
 4. Add tests in `driver_test.py`
@@ -59,7 +59,7 @@ Once the driver is created:
 ## 7. Directory Structure
 The script creates:
 ```
-packages/jumpstarter-driver-<driver_package>/
+python/packages/jumpstarter-driver-<driver_package>/
 ├── jumpstarter_driver_<driver_package>/
 │   ├── __init__.py
 │   ├── client.py
@@ -75,9 +75,9 @@ packages/jumpstarter-driver-<driver_package>/
 ## 8. Documentation
 The script automatically creates:
 - A README.md with basic documentation
-- A symlink in `docs/source/reference/package-apis/drivers/` pointing to the README
+- A symlink in `python/docs/source/reference/package-apis/drivers/` pointing to the README
 - Template files for all necessary components
-- A good example of documentation is in `docs/source/reference/package-apis/drivers/gpiod.md` and also `docs/source/reference/package-apis/drivers/pyserial.md`
+- A good example of documentation is in `python/docs/source/reference/package-apis/drivers/gpiod.md` and also `python/docs/source/reference/package-apis/drivers/pyserial.md`
 
 ## Code Style and Testing
 
@@ -99,7 +99,7 @@ The script automatically creates:
 Some drivers implement known classes that provide a CLI interface for the driver, but other
 clients implement their own CLI interface that will appear in the `j` command inside a `jmp shell`.
 
-Good examples can be found in `packages/jumpstarter-driver-shell/jumpstarter_driver_shell/client.py`, `packages/jumpstarter-driver-pyserial/jumpstarter_driver_pyserial/client.py` or `packages/jumpstarter-driver-probe-rs/jumpstarter_driver_probe_rs/client.py`.
+Good examples can be found in `python/packages/jumpstarter-driver-shell/jumpstarter_driver_shell/client.py`, `python/packages/jumpstarter-driver-pyserial/jumpstarter_driver_pyserial/client.py` or `python/packages/jumpstarter-driver-probe-rs/jumpstarter_driver_probe_rs/client.py`.
 
 # Composite drivers
 

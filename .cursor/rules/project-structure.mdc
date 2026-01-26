@@ -10,11 +10,14 @@ This project follows a monorepo structure with a top-level `pyproject.toml` that
 
 ```
 jumpstarter/
-├── pyproject.toml          # Main workspace configuration
-├── packages/               # All Python packages
-├── examples/               # Example applications
-├── docs/                   # Documentation
-├── __templates__/          # Templates for creating new drivers
+├── python/                 # Python workspace root
+│   ├── pyproject.toml      # Main workspace configuration
+│   ├── packages/           # All Python packages
+│   ├── examples/           # Example applications
+│   ├── docs/               # Documentation
+│   └── __templates__/      # Templates for creating new drivers
+├── controller/             # Controller components
+├── protocol/               # Protocol definitions
 └── .cursor/                # Cursor AI rules
 ```
 
@@ -22,8 +25,8 @@ jumpstarter/
 
 The project uses **UV workspace** for dependency management:
 
-- **Top-level `pyproject.toml`**: Defines the workspace and includes all packages
-- **Workspace members**: All packages in `packages/*` and `examples/*` are included
+- **Top-level `python/pyproject.toml`**: Defines the workspace and includes all packages
+- **Workspace members**: All packages in `python/packages/*` and `python/examples/*` are included
 - **Dependency groups**: Shared development dependencies (docs, dev)
 - **Tool configuration**: Ruff, typos, coverage, pytest settings
 
@@ -62,7 +65,7 @@ All driver packages follow the pattern `jumpstarter-driver-<name>/`:
 Each package follows this structure:
 
 ```
-packages/jumpstarter-driver-<name>/
+python/packages/jumpstarter-driver-<name>/
 ├── jumpstarter_driver_<name>/    # Main Python package
 │   ├── __init__.py
 │   ├── driver.py                 # Driver implementation
@@ -88,7 +91,7 @@ Each package's `pyproject.toml` includes:
 ## Examples Structure
 
 ```
-examples/
+python/examples/
 ├── automotive/                  # Automotive testing example
 │   ├── jumpstarter_example_automotive/
 │   ├── pyproject.toml
@@ -103,7 +106,7 @@ examples/
 
 ### Creating New Packages
 
-1. **Drivers**: Use `./__templates__/create_driver.sh` (see creating-new-drivers.mdc)
+1. **Drivers**: Use `./python/__templates__/create_driver.sh` (see creating-new-drivers.mdc)
 2. **Other packages**: Create manually following existing patterns
 
 ### Package Dependencies
@@ -130,7 +133,7 @@ examples/
 1. **Naming**: Package names use hyphens, module names use underscores
 2. **Entry points**: Drivers register via `jumpstarter.drivers` entry point
 3. **Versioning**: All packages share the same version from VCS
-4. **Documentation**: Each package has its own README.md, and when it's a driver we make a symlink in `docs/source/reference/package-apis/drivers/` pointing to the README.md for the driver.
+4. **Documentation**: Each package has its own README.md, and when it's a driver we make a symlink in `python/docs/source/reference/package-apis/drivers/` pointing to the README.md for the driver.
 5. **Testing**: Comprehensive test coverage required, but always try to focus on starting a server and client to test it e2e. Mock sometimes when there is too much dependency on system tools/services/compatibility issues between MacOs/Linux.
 6. **Dependencies**: Minimal, focused dependencies per package
 
