@@ -94,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run ruff
-        uses: astral-sh/ruff-action@84f83ecf9e1e15d26b7984c7ec9cf73d39ffc946 # v3.3.1
+        uses: astral-sh/ruff-action@57714a7c8a2e59f32539362ba31877a1957dded1 # v3.5.1
         with:
           src: './python'
           version-file: python/pyproject.toml
