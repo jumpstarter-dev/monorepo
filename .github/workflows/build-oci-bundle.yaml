@@ -19,7 +19,7 @@ jobs:
           ./build_fits.sh
 
       - name: Upload FIT artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: FIT-images
           path: python/packages/jumpstarter-driver-flashers/oci_bundles/aarch64-itb/data/*.itb
