@@ -175,6 +175,16 @@ EOF
   jmp create lease     --selector example.com/board=oidc --duration 1d
   jmp get    leases
   jmp get    exporters
+
+  # Verify label selector filtering works (regression test for issue #36)
+  run jmp get leases --selector example.com/board=oidc -o yaml
+  assert_success
+  assert_output --partial "example.com/board=oidc"
+
+  run jmp get leases --selector example.com/board=doesnotexist
+  assert_success
+  assert_output "No resources found."
+
   jmp delete leases    --all
 }
 

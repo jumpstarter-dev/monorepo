@@ -199,6 +199,7 @@ func LeaseFromProtobuf(
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: key.Namespace,
 			Name:      key.Name,
+			Labels:    selector.MatchLabels,
 		},
 		Spec: LeaseSpec{
 			ClientRef: clientRef,

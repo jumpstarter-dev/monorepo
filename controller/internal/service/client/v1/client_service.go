@@ -22,13 +22,13 @@ import (
 
 	"github.com/google/uuid"
 	jumpstarterdevv1alpha1 "github.com/jumpstarter-dev/jumpstarter-controller/api/v1alpha1"
-	"github.com/jumpstarter-dev/jumpstarter-controller/internal/controller"
 	cpb "github.com/jumpstarter-dev/jumpstarter-controller/internal/protocol/jumpstarter/client/v1"
 	"github.com/jumpstarter-dev/jumpstarter-controller/internal/service/auth"
 	"github.com/jumpstarter-dev/jumpstarter-controller/internal/service/utils"
 	"google.golang.org/protobuf/types/known/emptypb"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -135,16 +135,27 @@ func (s *ClientService) ListLeases(ctx context.Context, req *cpb.ListLeasesReque
 		return nil, err
 	}
 
+	// Apply active-only filter by default (when only_active is nil or true)
+	// We must combine this with the user's filter selector into a single
+	// MatchingLabelsSelector, because multiple MatchingLabelsSelector options
+	// would override each other instead of being ANDed together.
+	if req.OnlyActive == nil || *req.OnlyActive {
+		requirement, err := labels.NewRequirement(
+			string(jumpstarterdevv1alpha1.LeaseLabelEnded),
+			selection.DoesNotExist,
+			[]string{},
+		)
+		if err != nil {
+			return nil, err
+		}
+		selector = selector.Add(*requirement)
+	}
+
 	listOptions := []kclient.ListOption{
 		kclient.InNamespace(namespace),
 		kclient.MatchingLabelsSelector{Selector: selector},
 		kclient.Limit(int64(req.PageSize)),
 		kclient.Continue(req.PageToken),
-	}
-
-	// Apply active-only filter by default (when only_active is nil or true)
-	if req.OnlyActive == nil || *req.OnlyActive {
-		listOptions = append(listOptions, controller.MatchingActiveLeases())
 	}
 
 	var jleases jumpstarterdevv1alpha1.LeaseList

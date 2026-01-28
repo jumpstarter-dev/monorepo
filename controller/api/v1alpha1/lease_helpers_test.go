@@ -18,11 +18,16 @@ package v1alpha1
 
 import (
 	"testing"
+	"time"
 
+	cpb "github.com/jumpstarter-dev/jumpstarter-controller/internal/protocol/jumpstarter/client/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/types/known/durationpb"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestLeaseHelpers(t *testing.T) {
@@ -272,6 +277,41 @@ var _ = Describe("ParseLabelSelector", func() {
 			// Should not match labels with revision=v3
 			Expect(parsedSelector.Matches(labels.Set{"revision": "v3"})).To(BeFalse())
 			Expect(parsedSelector.Matches(labels.Set{"revision": "v3", "other": "value"})).To(BeFalse())
+		})
+	})
+})
+
+var _ = Describe("LeaseFromProtobuf", func() {
+	Context("when creating a lease with selector labels", func() {
+		It("should copy selector matchLabels to lease metadata labels", func() {
+			pbLease := &cpb.Lease{
+				Selector: "board-type=virtual,env=test",
+				Duration: durationpb.New(time.Hour),
+			}
+			key := types.NamespacedName{Name: "test-lease", Namespace: "default"}
+			clientRef := corev1.LocalObjectReference{Name: "test-client"}
+
+			lease, err := LeaseFromProtobuf(pbLease, key, clientRef)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(lease).NotTo(BeNil())
+			Expect(lease.Labels).To(HaveKeyWithValue("board-type", "virtual"))
+			Expect(lease.Labels).To(HaveKeyWithValue("env", "test"))
+		})
+
+		It("should handle selector with only matchExpressions (no matchLabels)", func() {
+			pbLease := &cpb.Lease{
+				Selector: "env!=prod", // Only != operator, results in no matchLabels
+				Duration: durationpb.New(time.Hour),
+			}
+			key := types.NamespacedName{Name: "test-lease", Namespace: "default"}
+			clientRef := corev1.LocalObjectReference{Name: "test-client"}
+
+			lease, err := LeaseFromProtobuf(pbLease, key, clientRef)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(lease).NotTo(BeNil())
+			Expect(lease.Labels).To(BeEmpty()) // nil or empty map is fine
 		})
 	})
 })

@@ -54,6 +54,6 @@ def get_leases(config, selector: str | None, output: OutputType, show_all: bool)
     Display one or many leases
     """
 
-    leases = config.list_leases(filter=selector, only_active=not show_all)
+    leases = config.list_leases(filter=selector, only_active=not show_all).filter_by_selector(selector)
 
     model_print(leases, output)

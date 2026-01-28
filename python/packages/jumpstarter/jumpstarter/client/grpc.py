@@ -13,6 +13,7 @@ from grpc.aio import Channel
 from jumpstarter_protocol import client_pb2, client_pb2_grpc, jumpstarter_pb2_grpc, kubernetes_pb2, router_pb2_grpc
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from jumpstarter.client.selectors import selector_contains
 from jumpstarter.common.grpc import translate_grpc_exceptions
 
 
@@ -310,6 +311,17 @@ class LeaseList(BaseModel):
     def rich_add_names(self, names):
         for lease in self.leases:
             lease.rich_add_names(names)
+
+    def filter_by_selector(self, filter_selector: str | None) -> LeaseList:
+        """Filter leases client-side by matching against their selector.
+
+        This handles matchExpressions that are not supported by the current server-side filtering.
+        Note: Pagination token is cleared since server pagination becomes invalid after client-side filtering.
+        """
+        if not filter_selector:
+            return self
+        filtered = [lease for lease in self.leases if selector_contains(lease.selector, filter_selector)]
+        return LeaseList(leases=filtered, next_page_token=None)
 
 
 @dataclass(kw_only=True, slots=True)
