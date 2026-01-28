@@ -8,10 +8,14 @@ on:
     branches:
       - main
       - 'release-*'
+  pull_request:
+    branches:
+      - main
+      - 'release-*'
   merge_group:
 
 env:
-  PUSH: ${{ github.repository_owner == 'jumpstarter-dev' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release-')) }}
+  PUSH: ${{ github.repository_owner == 'jumpstarter-dev' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release-') || github.event_name == 'pull_request') }}
   REGISTRY: quay.io
   QUAY_ORG: quay.io/jumpstarter-dev
 
@@ -119,6 +123,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ matrix.image_name }}
+          tags: |
+            type=ref,event=pr,prefix=pr-
+          labels: |
+            quay.expires-after=${{ github.event_name == 'pull_request' && '7d' || '' }}
 
       - name: Build and push Docker image
         id: push
@@ -127,7 +135,7 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: ${{ env.PUSH }}
-          tags: ${{ steps.set-tags.outputs.tags }}
+          tags: ${{ github.event_name == 'pull_request' && steps.meta.outputs.tags || steps.set-tags.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
