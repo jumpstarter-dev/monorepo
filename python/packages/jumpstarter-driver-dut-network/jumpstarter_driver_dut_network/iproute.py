@@ -8,6 +8,27 @@ from ._privilege import sudo_cmd
 
 logger = logging.getLogger(__name__)
 
+# Linux IFNAMSIZ is 16 including the terminating NUL.
+_IFNAMSIZ = 15
+
+# ip rule / ip route table IDs reserved by the kernel.
+_RESERVED_ROUTE_TABLES = frozenset({0, 253, 254, 255})
+
+
+def vlan_subinterface_name(parent: str, vlan_id: int) -> str:
+    """Return the conventional ``<parent>.<vlan_id>`` sub-interface name."""
+    return f"{parent}.{vlan_id}"
+
+
+def _sysctl_conf_key(iface: str, setting: str) -> str:
+    """Build a ``net.ipv4.conf.<iface>.<setting>`` sysctl key.
+
+    Sysctl uses ``.`` as a path separator, so dots in the interface name
+    (e.g. VLAN sub-interfaces like ``end0.905``) must be written as
+    slashes: ``net.ipv4.conf.end0/905.forwarding``.
+    """
+    return f"net.ipv4.conf.{iface.replace('.', '/')}.{setting}"
+
 
 def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """Run a read-only command (no sudo)."""
@@ -81,20 +102,134 @@ def remove_ip_alias(interface: str, ip: str, prefix_len: int) -> None:
 
 def get_interface_forwarding(iface: str) -> str:
     """Return the current per-interface forwarding value ("0" or "1")."""
-    result = _run(["sysctl", "-n", f"net.ipv4.conf.{iface}.forwarding"], check=False)
+    result = _run(["sysctl", "-n", _sysctl_conf_key(iface, "forwarding")], check=False)
     return result.stdout.strip() or "0"
 
 
 def set_interface_forwarding(iface: str, enabled: bool) -> None:
     """Enable or disable IPv4 forwarding on a specific interface.
 
-    Uses the per-interface sysctl (net.ipv4.conf.<iface>/forwarding) rather
+    Uses the per-interface sysctl (net.ipv4.conf.<iface>.forwarding) rather
     than the global net.ipv4.ip_forward to avoid turning the host into a
-    full router on all interfaces.
+    full router on all interfaces.  Dots in *iface* are translated to
+    slashes so VLAN names such as ``end0.905`` map to
+    ``net.ipv4.conf.end0/905.forwarding``.
     """
     value = "1" if enabled else "0"
-    logger.info("Setting net.ipv4.conf.%s.forwarding=%s", iface, value)
-    _run_priv(["sysctl", "-w", f"net.ipv4.conf.{iface}.forwarding={value}"])
+    key = _sysctl_conf_key(iface, "forwarding")
+    logger.info("Setting %s=%s", key, value)
+    _run_priv(["sysctl", "-w", f"{key}={value}"])
+
+
+def get_interface_rp_filter(iface: str) -> str:
+    """Return the current per-interface rp_filter value."""
+    result = _run(["sysctl", "-n", _sysctl_conf_key(iface, "rp_filter")], check=False)
+    return result.stdout.strip() or "0"
+
+
+def set_interface_rp_filter(iface: str, value: int) -> None:
+    """Set reverse-path filtering mode on a specific interface.
+
+    Common values: ``0`` (disabled), ``1`` (strict), ``2`` (loose).
+    Dots in *iface* are translated to slashes for the sysctl key.
+    """
+    key = _sysctl_conf_key(iface, "rp_filter")
+    logger.info("Setting %s=%s", key, value)
+    _run_priv(["sysctl", "-w", f"{key}={value}"])
+
+
+def create_vlan_interface(parent: str, vlan_id: int) -> str:
+    """Create (if needed) and bring up a VLAN sub-interface on *parent*.
+
+    Returns the sub-interface name (``<parent>.<vlan_id>``).  The
+    operation is idempotent: an existing sub-interface is left in place
+    and brought up.
+    """
+    name = vlan_subinterface_name(parent, vlan_id)
+    if len(name) > _IFNAMSIZ:
+        raise ValueError(
+            f"VLAN interface name {name!r} exceeds the Linux {_IFNAMSIZ}-character limit"
+        )
+    if not interface_exists(name):
+        logger.info("Creating VLAN interface %s on %s id %d", name, parent, vlan_id)
+        _run_priv(
+            ["ip", "link", "add", "link", parent, "name", name, "type", "vlan", "id", str(vlan_id)]
+        )
+    else:
+        logger.info("VLAN interface %s already exists", name)
+    nm_set_unmanaged(name)
+    _run_priv(["ip", "link", "set", name, "up"])
+    return name
+
+
+def delete_vlan_interface(name: str) -> None:
+    """Delete a VLAN sub-interface.  Missing interfaces are ignored."""
+    logger.info("Deleting VLAN interface %s", name)
+    _run_priv(["ip", "link", "del", name], check=False)
+
+
+def add_policy_route(gateway: str, device: str, table: int) -> None:
+    """Install a default route in a custom routing table for PBR.
+
+    *table* is the numeric routing-table ID (VLAN ID, or the DUT
+    private IPv4 address as an integer for untagged PBR).
+
+    Raises :class:`RuntimeError` if the ``ip route add`` command fails
+    (unless the route already exists, which is treated as idempotent).
+    """
+    if table in _RESERVED_ROUTE_TABLES:
+        raise ValueError(
+            f"Routing table {table} is reserved by the kernel (local/main/default)"
+        )
+    logger.info("Adding policy route default via %s dev %s table %d", gateway, device, table)
+    # ``replace`` is idempotent: if an identical route exists it is a no-op,
+    # and if a *different* default exists it is updated to the requested
+    # gateway/device.  ``add`` would return "File exists" in both cases,
+    # making it impossible to distinguish a harmless duplicate from a
+    # conflicting stale route.
+    result = _run_priv(
+        ["ip", "route", "replace", "default", "via", gateway, "dev", device,
+         "table", str(table), "onlink"],
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        raise RuntimeError(
+            f"Failed to add policy route (table {table}): {stderr}"
+        )
+
+
+def add_ip_rule(from_ip: str, table: int, priority: int = 100) -> None:
+    """Add a policy routing rule sending traffic from *from_ip* to *table*.
+
+    Raises :class:`RuntimeError` if the ``ip rule add`` command fails
+    (unless an identical rule already exists, which is treated as idempotent).
+    """
+    logger.info("Adding ip rule from %s table %d priority %d", from_ip, table, priority)
+    result = _run_priv(
+        ["ip", "rule", "add", "from", from_ip, "table", str(table), "priority", str(priority)],
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "File exists" in stderr:
+            logger.info("IP rule from %s table %d already exists, skipping", from_ip, table)
+        else:
+            raise RuntimeError(
+                f"Failed to add ip rule (from {from_ip} table {table}): {stderr}"
+            )
+
+
+def delete_ip_rule(from_ip: str, table: int) -> None:
+    """Delete a policy routing rule previously added by :func:`add_ip_rule`."""
+    logger.info("Deleting ip rule from %s table %d", from_ip, table)
+    _run_priv(["ip", "rule", "del", "from", from_ip, "table", str(table)], check=False)
+
+
+def flush_routing_table(table: int) -> None:
+    """Flush all routes from a custom routing table."""
+    logger.info("Flushing routing table %d", table)
+    _run_priv(["ip", "route", "flush", "table", str(table)], check=False)
 
 
 def detect_upstream_interface() -> str | None:

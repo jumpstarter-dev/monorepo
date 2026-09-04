@@ -23,7 +23,7 @@ export:
       dns_servers: ["8.8.8.8", "8.8.4.4"]
       dns_entries:
         - hostname: "registry.lab.local"
-          ip: "10.26.28.2"
+          ip: "198.51.100.2"
       # Optional: egress/ingress traffic filtering (exporter-enforced, not
       # exposed to remote clients).  When omitted, no filtering is applied.
       filter:
@@ -40,6 +40,6 @@ export:
           policy: "drop"              # default verdict for inbound traffic
           rules:
             - action: "accept"        # allow SSH from the lab network
-              source: "10.26.28.0/24"
+              source: "198.51.100.0/24"
               port: 22
               protocol: "tcp"

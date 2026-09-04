@@ -18,25 +18,30 @@ _IFACE_RE = re.compile(r"^[a-zA-Z0-9._-]{1,15}$")
 
 
 def _validate_iface(name: str) -> None:
+    """Raise if *name* is not a valid Linux interface name."""
     if not _IFACE_RE.match(name):
         raise ValueError(f"Invalid interface name: {name!r}")
 
 
 def _validate_subnet(subnet: str) -> None:
+    """Raise if *subnet* is not a valid CIDR network."""
     ipaddress.ip_network(subnet, strict=False)
 
 
 def _validate_ip(ip: str) -> None:
+    """Raise if *ip* is not a valid IP address."""
     ipaddress.ip_address(ip)
 
 
 def _run_nft(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    """Execute an ``nft`` command, using sudo when not root."""
     cmd = sudo_cmd(["nft"] + args)
     logger.debug("Running: %s", " ".join(cmd))
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
 def _load_ruleset(ruleset: str) -> None:
+    """Feed an nftables ruleset via ``nft -f -`` and raise on failure."""
     logger.debug("Loading nftables ruleset:\n%s", ruleset)
     result = subprocess.run(
         sudo_cmd(["nft", "-f", "-"]),
@@ -50,6 +55,7 @@ def _load_ruleset(ruleset: str) -> None:
 
 
 def _table_name_for(interface: str) -> str:
+    """Derive the nftables table name from the interface name."""
     return f"jumpstarter_{interface}".replace("-", "_")
 
 
@@ -73,9 +79,20 @@ def _render_filter_rule(
     return " ".join(parts)
 
 
+def _normalize_upstreams(upstream: str | list[str]) -> list[str]:
+    """Return a de-duplicated list of upstream/NAT interface names."""
+    if isinstance(upstream, str):
+        return [upstream]
+    seen: list[str] = []
+    for name in upstream:
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
 def _build_forward_chain(
     interface: str,
-    upstream: str,
+    upstream: str | list[str],
     filter_config: FilterConfig | None = None,
     extra_forward_rules: list[str] | None = None,
 ) -> str:
@@ -84,6 +101,10 @@ def _build_forward_chain(
     When *filter_config* is ``None`` the generated chain is identical
     to the legacy (pre-filter) behaviour so that existing setups are not
     affected.
+
+    *upstream* may be a single interface name or a list of NAT interfaces
+    (untagged upstream plus any VLAN sub-interfaces).  A single string
+    produces the same rules as before.
 
     *extra_forward_rules* are additional pre-formatted nftables rule lines
     (e.g. per-mapping DNAT accept rules for 1:1 NAT).  In legacy mode they
@@ -102,50 +123,69 @@ def _build_forward_chain(
     The chain *policy* is always ``accept`` so that forwarded traffic
     unrelated to this interface pair is not disturbed.
     """
-    lines: list[str] = [
+    extras = extra_forward_rules or []
+    upstreams = _normalize_upstreams(upstream)
+    body = (
+        _legacy_forward_body(interface, upstreams, extras)
+        if filter_config is None
+        else _filtered_forward_body(interface, upstreams, filter_config, extras)
+    )
+    lines = [
         "    chain forward {",
         "        type filter hook forward priority filter; policy accept;",
+        *body,
+        "    }",
     ]
+    return "\n".join(lines)
 
-    extras = extra_forward_rules or []
 
-    if filter_config is None:
-        # Legacy behaviour - no filtering.
-        lines.append(f'        iifname "{interface}" oifname "{upstream}" accept')
+def _legacy_forward_body(
+    interface: str,
+    upstreams: list[str],
+    extras: list[str],
+) -> list[str]:
+    """Build forward-chain rules in legacy (no filter) mode."""
+    lines: list[str] = []
+    for up in upstreams:
+        lines.append(f'        iifname "{interface}" oifname "{up}" accept')
         lines.append(
-            f'        iifname "{upstream}" oifname "{interface}" ct state related,established accept'
+            f'        iifname "{up}" oifname "{interface}" ct state related,established accept'
         )
-        lines.extend(extras)
-        lines.append("    }")
-        return "\n".join(lines)
+    lines.extend(extras)
+    return lines
 
-    # --- Filtered mode -------------------------------------------------
-    lines.append("        ct state related,established accept")
 
+def _filtered_forward_body(
+    interface: str,
+    upstreams: list[str],
+    filter_config: FilterConfig,
+    extras: list[str],
+) -> list[str]:
+    """Build forward-chain rules when a traffic filter is configured."""
+    lines: list[str] = ["        ct state related,established accept"]
     egress = filter_config.egress
     ingress = filter_config.ingress
 
-    # - Egress (DUT -> upstream) ----------------------------------------
     if egress:
-        for rule in egress.rules:
-            lines.append(_render_filter_rule(rule, interface, upstream, "destination"))
+        for up in upstreams:
+            for rule in egress.rules:
+                lines.append(_render_filter_rule(rule, interface, up, "destination"))
 
     egress_policy = egress.policy if egress else "accept"
-    lines.append(f'        iifname "{interface}" oifname "{upstream}" {egress_policy}')
+    for up in upstreams:
+        lines.append(f'        iifname "{interface}" oifname "{up}" {egress_policy}')
 
-    # - Extra forward rules (e.g. 1:1 NAT per-mapping accepts) ---------
     lines.extend(extras)
 
-    # - Ingress (upstream -> DUT) - new connections only ----------------
     if ingress:
-        for rule in ingress.rules:
-            lines.append(_render_filter_rule(rule, upstream, interface, "source"))
+        for up in upstreams:
+            for rule in ingress.rules:
+                lines.append(_render_filter_rule(rule, up, interface, "source"))
 
     ingress_policy = ingress.policy if ingress else "accept"
-    lines.append(f'        iifname "{upstream}" oifname "{interface}" {ingress_policy}')
-
-    lines.append("    }")
-    return "\n".join(lines)
+    for up in upstreams:
+        lines.append(f'        iifname "{up}" oifname "{interface}" {ingress_policy}')
+    return lines
 
 
 def apply_masquerade_rules(
@@ -154,24 +194,37 @@ def apply_masquerade_rules(
     subnet: str,
     table_name: str | None = None,
     filter_config: FilterConfig | None = None,
+    nat_interfaces: list[str] | None = None,
 ) -> None:
+    """Apply nftables masquerade NAT and forwarding rules.
+
+    *nat_interfaces* overrides *upstream* as the list of outbound
+    interfaces for masquerade (e.g. VLAN sub-interfaces).
+    """
     _validate_iface(interface)
     _validate_iface(upstream)
     _validate_subnet(subnet)
+    outbound = _normalize_upstreams(nat_interfaces if nat_interfaces else upstream)
+    for oif in outbound:
+        _validate_iface(oif)
     table = table_name or _table_name_for(interface)
     logger.info(
-        "Applying masquerade rules: interface=%s upstream=%s subnet=%s table=%s",
+        "Applying masquerade rules: interface=%s upstream=%s outbound=%s subnet=%s table=%s",
         interface,
         upstream,
+        outbound,
         subnet,
         table,
     )
-    forward_chain = _build_forward_chain(interface, upstream, filter_config)
+    forward_chain = _build_forward_chain(interface, outbound, filter_config)
+    masq_lines = "\n".join(
+        f'        oifname "{oif}" ip saddr {subnet} masquerade' for oif in outbound
+    )
     ruleset = (
         f"table ip {table} {{\n"
         f"    chain postrouting {{\n"
         f"        type nat hook postrouting priority srcnat; policy accept;\n"
-        f'        oifname "{upstream}" ip saddr {subnet} masquerade\n'
+        f"{masq_lines}\n"
         f"    }}\n"
         f"{forward_chain}\n"
         f"}}\n"
@@ -188,6 +241,7 @@ def apply_1to1_rules(
     table_name: str | None = None,
     filter_config: FilterConfig | None = None,
 ) -> None:
+    """Apply nftables 1:1 NAT (DNAT/SNAT) and forwarding rules."""
     _validate_iface(interface)
     _validate_iface(upstream)
     _validate_subnet(subnet)
@@ -208,20 +262,33 @@ def apply_1to1_rules(
     postrouting_rules = []
     extra_forward_rules = []
     output_rules = []
+    outbound: list[str] = []
 
     for m in mappings:
         private_ip = m["private_ip"]
         public_ip = m["public_ip"]
-        prerouting_rules.append(f'        iifname "{upstream}" ip daddr {public_ip} dnat to {private_ip}')
-        postrouting_rules.append(f'        ip saddr {private_ip} oifname "{upstream}" snat to {public_ip}')
-        extra_forward_rules.append(f'        iifname "{upstream}" oifname "{interface}" ip daddr {private_ip} accept')
+        nat_if = m.get("nat_interface") or upstream
+        _validate_iface(nat_if)
+        if nat_if not in outbound:
+            outbound.append(nat_if)
+        prerouting_rules.append(f'        iifname "{nat_if}" ip daddr {public_ip} dnat to {private_ip}')
+        postrouting_rules.append(f'        ip saddr {private_ip} oifname "{nat_if}" snat to {public_ip}')
+        extra_forward_rules.append(f'        iifname "{nat_if}" oifname "{interface}" ip daddr {private_ip} accept')
         output_rules.append(f"        ip daddr {public_ip} dnat to {private_ip}")
+
+    # Keep the original upstream in the forward/masquerade set so unmapped
+    # DUTs (no public_ip) still egress via the untagged interface.
+    if upstream not in outbound:
+        outbound.append(upstream)
 
     prerouting_block = "\n".join(prerouting_rules)
     postrouting_block = "\n".join(postrouting_rules)
     output_block = "\n".join(output_rules)
+    masq_lines = "\n".join(
+        f'        oifname "{oif}" ip saddr {subnet} masquerade' for oif in outbound
+    )
 
-    forward_chain = _build_forward_chain(interface, upstream, filter_config, extra_forward_rules)
+    forward_chain = _build_forward_chain(interface, outbound, filter_config, extra_forward_rules)
 
     ruleset = (
         f"table ip {table} {{\n"
@@ -236,7 +303,7 @@ def apply_1to1_rules(
         f"    chain postrouting {{\n"
         f"        type nat hook postrouting priority srcnat; policy accept;\n"
         f"{postrouting_block}\n"
-        f'        oifname "{upstream}" ip saddr {subnet} masquerade\n'
+        f"{masq_lines}\n"
         f"    }}\n"
         f"{forward_chain}\n"
         f"}}\n"
@@ -258,16 +325,27 @@ def is_filter_forward_drop() -> bool:
     return "policy drop" in result.stdout
 
 
-def ensure_filter_forward(interface: str, upstream: str) -> list[int]:
+def ensure_filter_forward(
+    interface: str,
+    upstream: str,
+    extra_interfaces: list[str] | None = None,
+) -> list[int]:
     """Insert nft ACCEPT rules into ``ip filter FORWARD`` if its policy is drop.
 
     Returns a list of rule handles so they can be removed on cleanup.
+    *extra_interfaces* are additional names (e.g. VLAN sub-interfaces)
+    that also need accept rules when Docker has set FORWARD policy drop.
     """
     if not is_filter_forward_drop():
         return []
 
+    ifaces: list[str] = []
+    for name in (interface, upstream, *(extra_interfaces or [])):
+        if name and name not in ifaces:
+            ifaces.append(name)
+
     handles: list[int] = []
-    for iface in (interface, upstream):
+    for iface in ifaces:
         for direction in ("iifname", "oifname"):
             result = _run_nft(
                 ["-e", "-a", "insert", "rule", "ip", "filter", "FORWARD",
@@ -333,11 +411,13 @@ def remove_ntp_redirect(table_name: str) -> None:
 
 
 def flush_rules(table_name: str = "jumpstarter") -> None:
+    """Delete the named nftables table (silently ignored if absent)."""
     logger.info("Flushing nftables table %s", table_name)
     _run_nft(["delete", "table", "ip", table_name], check=False)
 
 
 def list_rules(table_name: str = "jumpstarter") -> str:
+    """Return the nftables rules for *table_name* as text (empty if absent)."""
     result = _run_nft(["list", "table", "ip", table_name], check=False)
     if result.returncode != 0:
         return ""
