@@ -1492,7 +1492,7 @@ var _ = Describe("Scheduled Leases", func() {
 	When("creating lease with BeginTime + Duration (scheduled lease)", func() {
 		It("should wait until BeginTime before acquiring exporter", func() {
 			lease := leaseDutA2Sec.DeepCopy()
-			futureTime := metav1.NewTime(time.Now().Truncate(time.Second).Add(1 * time.Second))
+			futureTime := metav1.NewTime(time.Now().Add(2 * time.Second).Truncate(time.Second))
 			lease.Spec.BeginTime = &futureTime
 			lease.Spec.Duration = &metav1.Duration{Duration: 1 * time.Second}
 			lease.Spec.EndTime = nil
