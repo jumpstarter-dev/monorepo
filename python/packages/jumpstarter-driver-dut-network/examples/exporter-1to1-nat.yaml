@@ -21,16 +21,16 @@ export:
         - mac: "8a:12:4e:25:f4:8e"
           ip: "192.168.100.10"
           hostname: "sa8775p-1"
-          public_ip: "10.26.28.84"
+          public_ip: "198.51.100.84"
         - mac: "8a:12:4e:25:f4:8f"
           ip: "192.168.100.11"
           hostname: "sa8775p-2"
-          public_ip: "10.26.28.85"
+          public_ip: "198.51.100.85"
         # Entry without MAC: 1:1 NAT mapping only, no DHCP static lease
         - ip: "192.168.100.12"
           hostname: "nxp-board-03"
-          public_ip: "10.26.28.86"
+          public_ip: "198.51.100.86"
       dns_servers: ["8.8.8.8", "8.8.4.4"]
       dns_entries:
         - hostname: "controller.lab.local"
-          ip: "10.26.28.1"
+          ip: "198.51.100.1"

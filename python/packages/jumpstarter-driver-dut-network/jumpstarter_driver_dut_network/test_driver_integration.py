@@ -4,6 +4,7 @@ These tests require root or passwordless sudo for network namespace
 and interface operations. They are skipped when neither is available.
 """
 
+import ipaddress
 import os
 import re
 import shlex
@@ -1126,3 +1127,118 @@ class TestFilterDataPlane:
             assert result.returncode == 0, f"No-filter should allow all traffic: {result.stderr}"
         finally:
             driver.cleanup()
+
+
+@requires_linux
+@requires_privileges
+@requires_nft
+@requires_dnsmasq
+class TestVlanAndPbr:
+    """Control-plane tests for VLAN sub-interfaces and policy-based routing."""
+
+    VLAN_ID = 100
+    PUBLIC_IP = "10.99.0.50"
+    PUBLIC_GW = "10.99.0.1"
+
+    def _vlan_name(self, net_env: NetworkTestEnv) -> str:
+        return f"{net_env.VETH_UPSTREAM}.{self.VLAN_ID}"
+
+    def _vlan_addresses(self, net_env: NetworkTestEnv) -> list[dict]:
+        return [{
+            "mac": net_env.DUT_MAC,
+            "ip": net_env.DUT_IP,
+            "hostname": "test-dut",
+            "public_ip": self.PUBLIC_IP,
+            "vlan_id": self.VLAN_ID,
+            "public_gateway": self.PUBLIC_GW,
+        }]
+
+    def test_vlan_interface_created_and_cleaned_up(self, net_env: NetworkTestEnv):
+        vlan = self._vlan_name(net_env)
+        driver = net_env.create_driver(
+            nat_mode="1to1",
+            addresses=self._vlan_addresses(net_env),
+        )
+        try:
+            result = _run(f"ip link show {vlan}")
+            assert result.returncode == 0
+            addr = _run(f"ip -o -4 addr show dev {vlan}")
+            assert self.PUBLIC_IP in addr.stdout
+            fwd = _run(f"sysctl -n net.ipv4.conf.{net_env.VETH_UPSTREAM}/{self.VLAN_ID}.forwarding")
+            assert fwd.stdout.strip() == "1"
+            rp = _run(f"sysctl -n net.ipv4.conf.{net_env.VETH_UPSTREAM}/{self.VLAN_ID}.rp_filter")
+            assert rp.stdout.strip() == "2"
+            rules = _run("ip rule show")
+            assert net_env.DUT_IP in rules.stdout
+            assert f"lookup {self.VLAN_ID}" in rules.stdout
+            table = _run(f"ip route show table {self.VLAN_ID}")
+            assert self.PUBLIC_GW in table.stdout
+            assert vlan in table.stdout
+            nft = _run(f"nft list table ip {net_env.NFT_TABLE}")
+            assert vlan in nft.stdout
+            assert self.PUBLIC_IP in nft.stdout
+        finally:
+            driver.cleanup()
+
+        gone = _run(f"ip link show {vlan}", check=False)
+        assert gone.returncode != 0
+        rules = _run("ip rule show")
+        assert f"from {net_env.DUT_IP} lookup {self.VLAN_ID}" not in rules.stdout
+
+    def test_masquerade_nftables_use_vlan_interface(self, net_env: NetworkTestEnv):
+        vlan = self._vlan_name(net_env)
+        driver = net_env.create_driver(
+            nat_mode="masquerade",
+            addresses=self._vlan_addresses(net_env),
+        )
+        try:
+            nft = _run(f"nft list table ip {net_env.NFT_TABLE}")
+            assert f'oifname "{vlan}"' in nft.stdout
+            assert "masquerade" in nft.stdout
+        finally:
+            driver.cleanup()
+
+    def test_vlan_without_gateway_skips_pbr(self, net_env: NetworkTestEnv):
+        vlan = self._vlan_name(net_env)
+        driver = net_env.create_driver(
+            nat_mode="masquerade",
+            addresses=[{
+                "mac": net_env.DUT_MAC,
+                "ip": net_env.DUT_IP,
+                "hostname": "test-dut",
+                "vlan_id": self.VLAN_ID,
+            }],
+        )
+        try:
+            result = _run(f"ip link show {vlan}")
+            assert result.returncode == 0
+            rules = _run("ip rule show")
+            assert f"from {net_env.DUT_IP}" not in rules.stdout
+        finally:
+            driver.cleanup()
+
+        gone = _run(f"ip link show {vlan}", check=False)
+        assert gone.returncode != 0
+
+    def test_untagged_pbr_uses_private_ip_table(self, net_env: NetworkTestEnv):
+        pbr_ip = "192.168.200.51"
+        table = int(ipaddress.IPv4Address(pbr_ip))
+        driver = net_env.create_driver(
+            nat_mode="masquerade",
+            addresses=[{
+                "ip": pbr_ip,
+                "public_gateway": self.PUBLIC_GW,
+            }],
+        )
+        try:
+            rules = _run("ip rule show")
+            assert f"from {pbr_ip}" in rules.stdout
+            assert f"lookup {table}" in rules.stdout
+            table_routes = _run(f"ip route show table {table}")
+            assert self.PUBLIC_GW in table_routes.stdout
+            assert net_env.VETH_UPSTREAM in table_routes.stdout
+        finally:
+            driver.cleanup()
+
+        rules = _run("ip rule show")
+        assert f"from {pbr_ip} lookup {table}" not in rules.stdout

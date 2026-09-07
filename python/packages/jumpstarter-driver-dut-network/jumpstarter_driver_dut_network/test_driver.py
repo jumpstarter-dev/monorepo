@@ -1,3 +1,5 @@
+import ipaddress
+import logging
 import socket
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -92,7 +94,7 @@ class TestFilterValidation:
             "ingress": {
                 "policy": "drop",
                 "rules": [
-                    {"action": "accept", "source": "10.26.28.0/24", "port": 22, "protocol": "tcp"},
+                    {"action": "accept", "source": "198.51.100.0/24", "port": 22, "protocol": "tcp"},
                 ],
             },
         }
@@ -424,22 +426,22 @@ class TestDriverAddresses:
         driver, _, _, _ = _make_driver(tmp_path)
         with patch(f"{_DRIVER_MODULE}.dnsmasq"):
             driver.add_address("192.168.100.50", mac="aa:bb:cc:dd:ee:ff", hostname="new-dut")
-            assert any(entry["mac"] == "aa:bb:cc:dd:ee:ff" for entry in driver.addresses)
+            assert any(entry.mac == "aa:bb:cc:dd:ee:ff" for entry in driver.addresses)
 
     def test_add_address_without_mac(self, tmp_path: Path):
         driver, _, _, _ = _make_driver(tmp_path)
         with patch(f"{_DRIVER_MODULE}.dnsmasq"):
             driver.add_address("192.168.100.50", hostname="nat-only", public_ip="10.0.0.50")
             entry = driver.addresses[0]
-            assert "mac" not in entry
-            assert entry["public_ip"] == "10.0.0.50"
+            assert entry.mac is None
+            assert entry.public_ip == "10.0.0.50"
 
     def test_add_address_with_public_ip(self, tmp_path: Path):
         driver, _, _, _ = _make_driver(tmp_path)
         with patch(f"{_DRIVER_MODULE}.dnsmasq"):
             driver.add_address("192.168.100.50", mac="aa:bb:cc:dd:ee:ff", hostname="dut", public_ip="10.0.0.50")
             entry = driver.addresses[0]
-            assert entry["public_ip"] == "10.0.0.50"
+            assert entry.public_ip == "10.0.0.50"
 
     def test_add_replaces_existing_ip(self, tmp_path: Path):
         addrs = [{"mac": "AA:BB:CC:DD:EE:FF", "ip": "192.168.100.10"}]
@@ -447,7 +449,7 @@ class TestDriverAddresses:
         with patch(f"{_DRIVER_MODULE}.dnsmasq"):
             driver.add_address("192.168.100.10", mac="11:22:33:44:55:66")
             assert len(driver.addresses) == 1
-            assert driver.addresses[0]["mac"] == "11:22:33:44:55:66"
+            assert driver.addresses[0].mac == "11:22:33:44:55:66"
 
     def test_remove_address(self, tmp_path: Path):
         addrs = [{"mac": "aa:bb:cc:dd:ee:ff", "ip": "192.168.100.10"}]
@@ -548,3 +550,277 @@ class TestDnsNameIn1to1:
         with patch(f"{_DRIVER_MODULE}.socket.getaddrinfo", side_effect=socket.gaierror("fail")):
             with pytest.raises(ValueError, match="Cannot resolve hostname"):
                 _make_driver(tmp_path, nat_mode="1to1", addresses=leases)
+
+
+class TestAddressEntryValidation:
+    def test_omitted_vlan_fields_ok(self, tmp_path: Path):
+        driver, _, _, _ = _make_driver(
+            tmp_path,
+            addresses=[{"mac": "aa:bb:cc:dd:ee:ff", "ip": "192.168.100.10"}],
+        )
+        entry = driver.addresses[0]
+        assert entry.vlan_id is None
+        assert entry.public_gateway is None
+
+    def test_vlan_id_out_of_range(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="vlan_id"):
+            _make_driver(
+                tmp_path,
+                addresses=[{"ip": "192.168.100.10", "vlan_id": 5000}],
+            )
+
+    def test_public_gateway_without_vlan_is_allowed(self, tmp_path: Path):
+        driver, mock_ip, _, _ = _make_driver(
+            tmp_path,
+            addresses=[{
+                "ip": "192.168.100.10",
+                "public_gateway": "203.0.113.254",
+            }],
+        )
+        table = int(ipaddress.IPv4Address("192.168.100.10"))
+        mock_ip.create_vlan_interface.assert_not_called()
+        mock_ip.add_policy_route.assert_called_once_with("203.0.113.254", "eth-up", table)
+        mock_ip.add_ip_rule.assert_called_once_with("192.168.100.10", table, priority=100)
+        assert driver._pbr_tables == {table}
+
+    def test_public_gateway_without_vlan_requires_ipv4(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="valid IPv4"):
+            _make_driver(
+                tmp_path,
+                addresses=[{"ip": "not-an-ip", "public_gateway": "10.0.0.1"}],
+            )
+
+    def test_reserved_vlan_table_rejected_with_gateway(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="reserved"):
+            _make_driver(
+                tmp_path,
+                addresses=[{
+                    "ip": "192.168.100.10",
+                    "vlan_id": 254,
+                    "public_gateway": "203.0.113.254",
+                }],
+            )
+
+    def test_invalid_public_gateway(self, tmp_path: Path):
+        with pytest.raises(ValueError, match="public_gateway"):
+            _make_driver(
+                tmp_path,
+                addresses=[{
+                    "ip": "192.168.100.10",
+                    "vlan_id": 905,
+                    "public_gateway": "not-an-ip",
+                }],
+            )
+
+
+class TestVlanSetupMasquerade:
+    def test_creates_vlan_and_sysctls(self, tmp_path: Path):
+        addrs = [{
+            "mac": "aa:bb:cc:dd:ee:ff",
+            "ip": "192.168.100.125",
+            "vlan_id": 905,
+            "public_ip": "203.0.113.1",
+            "public_gateway": "203.0.113.254",
+        }]
+        _, mock_ip, mock_nft, _ = _make_driver(tmp_path, nat_mode="masquerade", addresses=addrs)
+        mock_ip.create_vlan_interface.assert_called_once_with("eth-up", 905)
+        mock_ip.set_interface_forwarding.assert_any_call("eth-up.905", True)
+        mock_ip.set_interface_rp_filter.assert_called_once_with("eth-up.905", 2)
+        mock_ip.add_ip_alias.assert_called_once_with("eth-up.905", "203.0.113.1", 24)
+        mock_ip.add_policy_route.assert_called_once_with("203.0.113.254", "eth-up.905", 905)
+        mock_ip.add_ip_rule.assert_called_once_with("192.168.100.125", 905, priority=100)
+        call_kwargs = mock_nft.apply_masquerade_rules.call_args[1]
+        assert call_kwargs["nat_interfaces"] == ["eth-up.905"]
+
+    def test_no_vlan_does_not_pass_nat_interfaces(self, tmp_path: Path):
+        _, _, mock_nft, _ = _make_driver(tmp_path, nat_mode="masquerade")
+        mock_nft.apply_masquerade_rules.assert_called_once_with(
+            "eth-dut", "eth-up", "192.168.100.0/24",
+            table_name="jumpstarter_eth_dut",
+            filter_config=None,
+        )
+
+    def test_ensure_filter_forward_includes_vlan(self, tmp_path: Path):
+        addrs = [{"ip": "192.168.100.125", "vlan_id": 905}]
+        _, mock_ip, mock_nft, _ = _make_driver(tmp_path, nat_mode="masquerade", addresses=addrs)
+        mock_nft.ensure_filter_forward.assert_called_once_with(
+            "eth-dut", "eth-up", extra_interfaces=["eth-up.905"],
+        )
+        mock_ip.add_policy_route.assert_not_called()
+        mock_ip.add_ip_rule.assert_not_called()
+
+    def test_add_address_creates_vlan_and_pbr(self, tmp_path: Path):
+        driver, _, _, _ = _make_driver(tmp_path)
+        with patch(f"{_DRIVER_MODULE}.dnsmasq"), \
+             patch(f"{_DRIVER_MODULE}.iproute") as mock_ip, \
+             patch(f"{_DRIVER_MODULE}.nftables") as mock_nft:
+            mock_nft.list_rules.return_value = ""
+            driver.add_address(
+                "192.168.100.50",
+                public_ip="10.99.0.50",
+                vlan_id=100,
+                public_gateway="10.99.0.1",
+            )
+            mock_ip.create_vlan_interface.assert_called_with("eth-up", 100)
+            mock_ip.add_policy_route.assert_called_with("10.99.0.1", "eth-up.100", 100)
+            mock_ip.add_ip_rule.assert_called_with("192.168.100.50", 100, priority=100)
+            mock_nft.apply_masquerade_rules.assert_called()
+
+    def test_vlan_without_gateway_emits_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+        addrs = [{"ip": "192.168.100.125", "vlan_id": 905}]
+        with caplog.at_level(logging.WARNING, logger="driver.DutNetwork"):
+            _make_driver(tmp_path, nat_mode="masquerade", addresses=addrs)
+        assert any(
+            "no public_gateway" in rec.message and "192.168.100.125" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_vlan_with_gateway_does_not_warn(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+        addrs = [{
+            "ip": "192.168.100.125",
+            "vlan_id": 905,
+            "public_gateway": "203.0.113.254",
+        }]
+        with caplog.at_level(logging.WARNING, logger="driver.DutNetwork"):
+            _make_driver(tmp_path, nat_mode="masquerade", addresses=addrs)
+        assert not any("no public_gateway" in rec.message for rec in caplog.records)
+
+
+class TestVlanSetup1to1:
+    def test_alias_and_rules_use_vlan_interface(self, tmp_path: Path):
+        addrs = [{
+            "mac": "aa:bb:cc:dd:ee:ff",
+            "ip": "192.168.100.125",
+            "public_ip": "203.0.113.1",
+            "vlan_id": 905,
+            "public_gateway": "203.0.113.254",
+        }]
+        driver, mock_ip, mock_nft, _ = _make_driver(tmp_path, nat_mode="1to1", addresses=addrs)
+        mock_ip.create_vlan_interface.assert_called_once_with("eth-up", 905)
+        mock_ip.add_ip_alias.assert_called_once_with("eth-up.905", "203.0.113.1", 24)
+        mappings = mock_nft.apply_1to1_rules.call_args[0][2]
+        assert mappings == [{
+            "private_ip": "192.168.100.125",
+            "public_ip": "203.0.113.1",
+            "nat_interface": "eth-up.905",
+        }]
+        assert driver._added_aliases == {"203.0.113.1"}
+        assert driver._alias_ifaces["203.0.113.1"] == "eth-up.905"
+
+    def test_untagged_1to1_unchanged(self, tmp_path: Path):
+        addrs = [{
+            "mac": "aa:bb:cc:dd:ee:ff",
+            "ip": "192.168.100.10",
+            "public_ip": "10.0.0.50",
+        }]
+        _, mock_ip, mock_nft, _ = _make_driver(tmp_path, nat_mode="1to1", addresses=addrs)
+        mock_ip.create_vlan_interface.assert_not_called()
+        mock_ip.add_ip_alias.assert_called_once_with("eth-up", "10.0.0.50", 24)
+        mappings = mock_nft.apply_1to1_rules.call_args[0][2]
+        assert mappings == [{"private_ip": "192.168.100.10", "public_ip": "10.0.0.50"}]
+
+
+class TestVlanCleanup:
+    def test_cleanup_reverses_vlan_and_pbr(self, tmp_path: Path):
+        addrs = [{
+            "ip": "192.168.100.125",
+            "public_ip": "203.0.113.1",
+            "vlan_id": 905,
+            "public_gateway": "203.0.113.254",
+        }]
+        driver, _, _, _ = _make_driver(tmp_path, nat_mode="1to1", addresses=addrs)
+        with patch(f"{_DRIVER_MODULE}.iproute") as mock_ip2, \
+             patch(f"{_DRIVER_MODULE}.nftables"), \
+             patch(f"{_DRIVER_MODULE}.dnsmasq"):
+            driver.cleanup()
+            mock_ip2.remove_ip_alias.assert_called_once_with("eth-up.905", "203.0.113.1", 24)
+            mock_ip2.delete_ip_rule.assert_called_once_with("192.168.100.125", 905)
+            mock_ip2.flush_routing_table.assert_called_once_with(905)
+            mock_ip2.delete_vlan_interface.assert_called_once_with("eth-up.905")
+        assert driver._created_vlans == set()
+        assert driver._pbr_rules == []
+        assert driver._added_aliases == set()
+
+
+class TestUntaggedPbr:
+    def test_uses_private_ip_as_table_id(self, tmp_path: Path):
+        table = int(ipaddress.IPv4Address("192.168.100.10"))
+        addrs = [{
+            "mac": "aa:bb:cc:dd:ee:ff",
+            "ip": "192.168.100.10",
+            "public_gateway": "10.0.0.1",
+        }]
+        _, mock_ip, mock_nft, _ = _make_driver(tmp_path, nat_mode="masquerade", addresses=addrs)
+        mock_ip.create_vlan_interface.assert_not_called()
+        mock_ip.add_policy_route.assert_called_once_with("10.0.0.1", "eth-up", table)
+        mock_ip.add_ip_rule.assert_called_once_with("192.168.100.10", table, priority=100)
+        mock_nft.apply_masquerade_rules.assert_called_once_with(
+            "eth-dut", "eth-up", "192.168.100.0/24",
+            table_name="jumpstarter_eth_dut",
+            filter_config=None,
+        )
+
+    def test_cleanup_removes_untagged_pbr(self, tmp_path: Path):
+        table = int(ipaddress.IPv4Address("192.168.100.10"))
+        addrs = [{"ip": "192.168.100.10", "public_gateway": "10.0.0.1"}]
+        driver, _, _, _ = _make_driver(tmp_path, nat_mode="masquerade", addresses=addrs)
+        with patch(f"{_DRIVER_MODULE}.iproute") as mock_ip2, \
+             patch(f"{_DRIVER_MODULE}.nftables"), \
+             patch(f"{_DRIVER_MODULE}.dnsmasq"):
+            driver.cleanup()
+            mock_ip2.delete_ip_rule.assert_called_once_with("192.168.100.10", table)
+            mock_ip2.flush_routing_table.assert_called_once_with(table)
+            mock_ip2.delete_vlan_interface.assert_not_called()
+
+    def test_add_address_applies_untagged_pbr(self, tmp_path: Path):
+        table = int(ipaddress.IPv4Address("192.168.100.51"))
+        driver, _, _, _ = _make_driver(tmp_path)
+        with patch(f"{_DRIVER_MODULE}.dnsmasq"), \
+             patch(f"{_DRIVER_MODULE}.iproute") as mock_ip, \
+             patch(f"{_DRIVER_MODULE}.nftables"):
+            driver.add_address("192.168.100.51", public_gateway="10.99.0.1")
+            mock_ip.create_vlan_interface.assert_not_called()
+            mock_ip.add_policy_route.assert_called_once_with("10.99.0.1", "eth-up", table)
+            mock_ip.add_ip_rule.assert_called_once_with("192.168.100.51", table, priority=100)
+
+    def test_reserved_untagged_table_rejected(self, tmp_path: Path):
+        """Untagged PBR where int(IPv4) hits a reserved table should fail."""
+        with pytest.raises(ValueError, match="reserved"):
+            _make_driver(
+                tmp_path,
+                addresses=[{"ip": "0.0.0.253", "public_gateway": "10.0.0.1"}],
+            )
+
+
+class TestSyncNatRefreshesFwdHandles:
+    """Verify _sync_nat re-creates FORWARD ACCEPT rules for new VLAN interfaces."""
+
+    def test_runtime_add_address_refreshes_fwd_handles(self, tmp_path: Path):
+        driver, _, _, _ = _make_driver(tmp_path)
+        driver._fwd_rule_handles = [42, 43]
+        with patch(f"{_DRIVER_MODULE}.dnsmasq"), \
+             patch(f"{_DRIVER_MODULE}.iproute"), \
+             patch(f"{_DRIVER_MODULE}.nftables") as mock_nft:
+            mock_nft.list_rules.return_value = ""
+            driver.add_address(
+                "192.168.100.50",
+                public_ip="10.99.0.50",
+                vlan_id=100,
+                public_gateway="10.99.0.1",
+            )
+            mock_nft.remove_filter_forward.assert_called_once_with([42, 43])
+            mock_nft.ensure_filter_forward.assert_called_once_with(
+                "eth-dut", "eth-up", extra_interfaces=["eth-up.100"],
+            )
+
+    def test_runtime_untagged_pbr_does_not_add_extra_ifaces(self, tmp_path: Path):
+        driver, _, _, _ = _make_driver(tmp_path)
+        driver._fwd_rule_handles = [42]
+        with patch(f"{_DRIVER_MODULE}.dnsmasq"), \
+             patch(f"{_DRIVER_MODULE}.iproute"), \
+             patch(f"{_DRIVER_MODULE}.nftables") as mock_nft:
+            mock_nft.list_rules.return_value = ""
+            driver.add_address("192.168.100.51", public_gateway="10.99.0.1")
+            mock_nft.remove_filter_forward.assert_called_once_with([42])
+            call_kwargs = mock_nft.ensure_filter_forward.call_args
+            assert call_kwargs == (("eth-dut", "eth-up"),)

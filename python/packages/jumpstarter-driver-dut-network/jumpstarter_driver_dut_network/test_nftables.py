@@ -56,12 +56,12 @@ class TestBuildForwardChain:
             ingress=FilterDirection(
                 policy="drop",
                 rules=[
-                    FilterRule(action="accept", source="10.26.28.0/24", port=22, protocol="tcp"),
+                    FilterRule(action="accept", source="198.51.100.0/24", port=22, protocol="tcp"),
                 ],
             ),
         )
         result = nftables._build_forward_chain("br-jmp0", "eth0", filter_config=fc)
-        assert "ip saddr 10.26.28.0/24 tcp dport 22 accept" in result
+        assert "ip saddr 198.51.100.0/24 tcp dport 22 accept" in result
         # Ingress catch-all should be drop
         lines = result.strip().splitlines()
         # The last rule before "}" should be the ingress catch-all
@@ -76,7 +76,7 @@ class TestBuildForwardChain:
             ),
             ingress=FilterDirection(
                 policy="drop",
-                rules=[FilterRule(action="accept", source="10.26.28.0/24", port=22, protocol="tcp")],
+                rules=[FilterRule(action="accept", source="198.51.100.0/24", port=22, protocol="tcp")],
             ),
         )
         result = nftables._build_forward_chain("br-jmp0", "eth0", filter_config=fc)
@@ -87,7 +87,7 @@ class TestBuildForwardChain:
             i for i, ln in enumerate(lines)
             if 'iifname "br-jmp0"' in ln and "daddr" not in ln
         )
-        ingress_rule = next(i for i, ln in enumerate(lines) if "10.26.28.0/24" in ln)
+        ingress_rule = next(i for i, ln in enumerate(lines) if "198.51.100.0/24" in ln)
         ingress_catchall = next(
             i for i, ln in enumerate(lines)
             if 'iifname "eth0"' in ln and "saddr" not in ln and "ct state" not in ln
@@ -273,6 +273,58 @@ class TestOneToOneRuleset:
             assert "ip daddr 192.168.100.10 accept" in ruleset
 
 
+class TestVlanNatRules:
+    """VLAN sub-interface names must appear in nftables instead of the parent."""
+
+    def test_masquerade_uses_vlan_interface(self):
+        with patch.object(nftables, "_run_nft"), \
+             patch.object(nftables, "_load_ruleset") as mock_load:
+            nftables.apply_masquerade_rules(
+                "enp1s0u1", "end0", "192.168.100.0/24",
+                nat_interfaces=["end0.905"],
+            )
+            ruleset = mock_load.call_args[0][0]
+            assert 'oifname "end0.905" ip saddr 192.168.100.0/24 masquerade' in ruleset
+            assert 'iifname "enp1s0u1" oifname "end0.905" accept' in ruleset
+            assert 'iifname "end0.905" oifname "enp1s0u1" ct state related,established accept' in ruleset
+            assert 'oifname "end0" ip saddr' not in ruleset
+
+    def test_1to1_uses_vlan_interface(self):
+        mappings = [{
+            "private_ip": "192.168.100.125",
+            "public_ip": "203.0.113.1",
+            "nat_interface": "end0.905",
+        }]
+        with patch.object(nftables, "_run_nft"), \
+             patch.object(nftables, "_load_ruleset") as mock_load:
+            nftables.apply_1to1_rules("enp1s0u1", "end0", mappings, "192.168.100.0/24")
+            ruleset = mock_load.call_args[0][0]
+            assert 'iifname "end0.905" ip daddr 203.0.113.1 dnat to 192.168.100.125' in ruleset
+            assert 'ip saddr 192.168.100.125 oifname "end0.905" snat to 203.0.113.1' in ruleset
+            assert 'iifname "end0.905" oifname "enp1s0u1" ip daddr 192.168.100.125 accept' in ruleset
+            assert 'iifname "enp1s0u1" oifname "end0.905" accept' in ruleset
+            assert 'iifname "end0.905" oifname "enp1s0u1" ct state related,established accept' in ruleset
+            # Untagged parent is kept for unmapped-DUT masquerade fallback
+            assert 'oifname "end0" ip saddr 192.168.100.0/24 masquerade' in ruleset
+
+    def test_1to1_without_nat_interface_stays_on_upstream(self):
+        mappings = [{"private_ip": "192.168.100.10", "public_ip": "10.0.0.50"}]
+        with patch.object(nftables, "_run_nft"), \
+             patch.object(nftables, "_load_ruleset") as mock_load:
+            nftables.apply_1to1_rules("br-jmp0", "eth0", mappings, "192.168.100.0/24")
+            ruleset = mock_load.call_args[0][0]
+            assert 'iifname "eth0" ip daddr 10.0.0.50 dnat to 192.168.100.10' in ruleset
+            assert 'oifname "eth0" snat to 10.0.0.50' in ruleset
+
+    def test_masquerade_without_nat_interfaces_unchanged(self):
+        with patch.object(nftables, "_run_nft"), \
+             patch.object(nftables, "_load_ruleset") as mock_load:
+            nftables.apply_masquerade_rules("br-jmp0", "eth0", "192.168.100.0/24")
+            ruleset = mock_load.call_args[0][0]
+            assert 'oifname "eth0" ip saddr 192.168.100.0/24 masquerade' in ruleset
+            assert 'iifname "br-jmp0" oifname "eth0" accept' in ruleset
+
+
 class TestInterfaceNameValidation:
     def test_rejects_invalid_names(self):
         with pytest.raises(ValueError, match="Invalid interface name"):
@@ -338,6 +390,15 @@ class TestFilterForwardDrop:
             assert len(handles) == 4
             assert all(h == 42 for h in handles)
             assert mock_nft.call_count == 4
+
+    def test_ensure_inserts_extra_interfaces(self):
+        insert_output = 'insert rule ip filter FORWARD iifname "end0.905" accept # handle 7\n'
+        fake_insert = subprocess.CompletedProcess(args=[], returncode=0, stdout=insert_output)
+        with patch.object(nftables, "is_filter_forward_drop", return_value=True), \
+             patch.object(nftables, "_run_nft", return_value=fake_insert) as mock_nft:
+            handles = nftables.ensure_filter_forward("br-jmp0", "eth0", extra_interfaces=["end0.905"])
+            assert len(handles) == 6
+            assert mock_nft.call_count == 6
 
     def test_ensure_returns_empty_when_accept(self):
         with patch.object(nftables, "is_filter_forward_drop", return_value=False):

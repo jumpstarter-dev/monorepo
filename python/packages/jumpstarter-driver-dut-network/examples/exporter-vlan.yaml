@@ -1,0 +1,32 @@
+apiVersion: jumpstarter.dev/v1alpha1
+kind: ExporterConfig
+metadata:
+  namespace: default
+  name: automotive-lab-vlan
+endpoint: grpc.jumpstarter.example.com:8082
+token: "<token>"
+export:
+  dut-network:
+    type: jumpstarter_driver_dut_network.driver.DutNetwork
+    config:
+      interface: "enp1s0u1"
+      subnet: "192.168.100.0/24"
+      gateway_ip: "192.168.100.1"
+      upstream_interface: "end0"
+      nat_mode: "1to1"
+      dhcp_enabled: true
+      addresses:
+        # Tagged 1:1 NAT: public IP lives on end0.905, PBR sends DUT
+        # traffic out via 203.0.113.254.
+        - mac: "8a:12:4e:25:f4:8e"
+          ip: "192.168.100.125"
+          hostname: "sa8775p"
+          public_ip: "203.0.113.1"
+          vlan_id: 905
+          public_gateway: "203.0.113.254"
+        # Untagged entry on the same exporter: omit vlan_id / public_gateway
+        # and behaviour matches the pre-VLAN driver.
+        - mac: "8a:12:4e:25:f4:8f"
+          ip: "192.168.100.126"
+          hostname: "untagged-dut"
+          public_ip: "198.51.100.86"

@@ -28,9 +28,17 @@ class DutNetworkClient(DriverClient):
         """List all current DHCP leases (dynamic + static)."""
         return self.call("get_leases")
 
-    def add_address(self, ip: str, mac: str | None = None, hostname: str = "", public_ip: str | None = None) -> None:
+    def add_address(
+        self,
+        ip: str,
+        mac: str | None = None,
+        hostname: str = "",
+        public_ip: str | None = None,
+        vlan_id: int | None = None,
+        public_gateway: str | None = None,
+    ) -> None:
         """Add an address entry (with optional MAC for DHCP static lease)."""
-        self.call("add_address", ip, mac, hostname, public_ip)
+        self.call("add_address", ip, mac, hostname, public_ip, vlan_id, public_gateway)
 
     def remove_address(self, ip: str) -> None:
         """Remove an address entry by IP."""
@@ -71,6 +79,7 @@ class DutNetworkClient(DriverClient):
             yield line
 
     def cli(self):  # noqa: C901
+        """Build the Click CLI command group for this driver."""
         @driver_click_group(self)
         def base():
             """DUT Network Isolation"""
@@ -109,9 +118,20 @@ class DutNetworkClient(DriverClient):
         @click.option("--mac", "-m", default=None, help="MAC address for DHCP static lease")
         @click.option("--hostname", "-n", default="", help="Hostname for the entry")
         @click.option("--public-ip", default=None, help="Public IP for 1:1 NAT mapping")
-        def add_address(ip: str, mac: str | None, hostname: str, public_ip: str | None):
+        @click.option("--vlan-id", type=int, default=None, help="VLAN ID for a tagged sub-interface")
+        @click.option("--public-gateway", default=None, help="Gateway for policy-based routing")
+        def add_address(
+            ip: str,
+            mac: str | None,
+            hostname: str,
+            public_ip: str | None,
+            vlan_id: int | None,
+            public_gateway: str | None,
+        ):
             """Add an address entry (with optional MAC for DHCP static lease)."""
-            self.add_address(ip, mac, hostname, public_ip)
+            self.add_address(
+                ip, mac, hostname, public_ip, vlan_id, public_gateway,
+            )
             msg = f"Added address: {ip}"
             if mac:
                 msg += f" (mac={mac})"

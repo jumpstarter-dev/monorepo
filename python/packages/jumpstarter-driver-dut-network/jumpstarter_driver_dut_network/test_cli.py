@@ -182,7 +182,7 @@ class TestAddAddressCommand:
                 ])
                 assert result.exit_code == 0
                 mock_add.assert_called_once_with(
-                    "192.168.100.50", None, "", "10.0.0.50",
+                    "192.168.100.50", None, "", "10.0.0.50", None, None,
                 )
 
     def test_add_address_with_hostname(self, tmp_path: Path, runner: CliRunner):
@@ -194,7 +194,21 @@ class TestAddAddressCommand:
                 )
                 assert result.exit_code == 0
                 mock_add.assert_called_once_with(
-                    "192.168.100.50", "aa:bb:cc:dd:ee:ff", "my-dut", None,
+                    "192.168.100.50", "aa:bb:cc:dd:ee:ff", "my-dut", None, None, None,
+                )
+
+    def test_add_address_with_vlan_options(self, tmp_path: Path, runner: CliRunner):
+        with _make_client(tmp_path) as client:
+            with patch.object(client, "add_address") as mock_add:
+                result = runner.invoke(client.cli(), [
+                    "add-address", "192.168.100.50",
+                    "--public-ip", "203.0.113.1",
+                    "--vlan-id", "905",
+                    "--public-gateway", "203.0.113.254",
+                ])
+                assert result.exit_code == 0
+                mock_add.assert_called_once_with(
+                    "192.168.100.50", None, "", "203.0.113.1", 905, "203.0.113.254",
                 )
 
     def test_requires_ip_argument(self, tmp_path: Path, runner: CliRunner):

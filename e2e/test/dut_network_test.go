@@ -73,6 +73,14 @@ var _ = Describe("DUT Network E2E Tests", Label("dut-network"), Ordered, Continu
 		extIP      = "10.99.0.1"
 		upstreamIP = "10.99.0.2"
 		subnet     = "192.168.200.0/24"
+		vlanID     = 100
+		vlanDutIP  = "192.168.200.50"
+		vlanPubIP  = "10.100.0.50"
+		vlanExtIP  = "10.100.0.1"
+		pbrDutIP   = "192.168.200.51"
+		noPbrVlan  = 101
+		noPbrDutIP = "192.168.200.52"
+		noPbrExtIP = "10.101.0.1"
 	)
 
 	setupNetworkNamespaces := func() {
@@ -169,6 +177,17 @@ var _ = Describe("DUT Network E2E Tests", Label("dut-network"), Ordered, Continu
 		return raw[start:]
 	}
 
+	addDutAddr := func(ip string) {
+		runInNs(dutNs, "ip", "addr", "replace", ip+"/24", "dev", vethDut)
+	}
+	delDutAddr := func(ip string) {
+		_, _ = runInNsCapture(dutNs, "ip", "addr", "del", ip+"/24", "dev", vethDut)
+	}
+
+	setupExtVLAN := func(id int, cidr string) string {
+		return setupVLANInNs(extNs, vethExt, id, cidr)
+	}
+
 	Context("Network status", func() {
 		It("should report network status via CLI", func() {
 			out, err := jmpShell("j", "dut-network", "status")
@@ -202,11 +221,7 @@ var _ = Describe("DUT Network E2E Tests", Label("dut-network"), Ordered, Continu
 
 	Context("Connectivity", func() {
 		It("should allow DUT to reach external via NAT", func() {
-			Eventually(func() error {
-				_, err := runInNsCapture(dutNs, "ping", "-c", "1", "-W", "2", extIP)
-				return err
-			}, 10*time.Second, 1*time.Second).Should(Succeed(),
-				"DUT should be able to ping external IP %s via NAT", extIP)
+			expectPingNS(dutNs, "", extIP)
 		})
 	})
 
@@ -255,39 +270,60 @@ var _ = Describe("DUT Network E2E Tests", Label("dut-network"), Ordered, Continu
 
 	Context("TCP connectivity", func() {
 		It("should allow TCP connections from DUT to external via NAT", func() {
-			serverScript := "import socket; " +
-				"s=socket.socket(); " +
-				"s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); " +
-				"s.bind(('',9998)); " +
-				"s.listen(1); " +
-				"s.settimeout(10); " +
-				"conn,_=s.accept(); " +
-				"conn.sendall(b'E2E_OK'); " +
-				"conn.close(); " +
-				"s.close()"
+			expectTCPEcho(dutNs, extNs, "", extIP, 9998)
+		})
+	})
 
-			fullArgs := []string{"ip", "netns", "exec", extNs, "python3", "-c", serverScript}
-			bin, cmdArgs := sudoArgs(fullArgs...)
-			listener := exec.Command(bin, cmdArgs...) //nolint:gosec
-			listener.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			Expect(listener.Start()).To(Succeed())
+	Context("VLAN and policy-based routing", func() {
+		It("should allow TCP from DUT via VLAN PBR", func() {
+			extVlan := setupExtVLAN(vlanID, vlanExtIP+"/24")
+			defer deleteLinkInNs(extNs, extVlan)
+
+			out, err := jmpShell("j", "dut-network", "add-address",
+				vlanDutIP, "--public-ip", vlanPubIP,
+				"--vlan-id", fmt.Sprintf("%d", vlanID), "--public-gateway", vlanExtIP)
+			Expect(err).NotTo(HaveOccurred(), out)
+
+			addDutAddr(vlanDutIP)
 			defer func() {
-				_ = syscall.Kill(-listener.Process.Pid, syscall.SIGKILL)
-				_ = listener.Wait()
+				delDutAddr(vlanDutIP)
+				_, _ = jmpShell("j", "dut-network", "remove-address", vlanDutIP)
 			}()
 
-			time.Sleep(500 * time.Millisecond)
+			expectTCPEcho(dutNs, extNs, vlanDutIP, vlanExtIP, 9998)
+		})
 
-			clientScript := fmt.Sprintf(
-				"import socket; "+
-					"s=socket.create_connection(('%s',9998),timeout=5); "+
-					"data=s.recv(10); "+
-					"s.close(); "+
-					"print(data.decode())",
-				extIP)
-			out, err := runInNsCapture(dutNs, "python3", "-c", clientScript)
-			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("TCP connection failed: %s", out))
-			Expect(out).To(ContainSubstring("E2E_OK"))
+		It("should allow TCP from DUT via untagged source-IP PBR", func() {
+			out, err := jmpShell("j", "dut-network", "add-address",
+				pbrDutIP, "--public-gateway", extIP)
+			Expect(err).NotTo(HaveOccurred(), out)
+
+			addDutAddr(pbrDutIP)
+			defer func() {
+				delDutAddr(pbrDutIP)
+				_, _ = jmpShell("j", "dut-network", "remove-address", pbrDutIP)
+			}()
+
+			expectTCPEcho(dutNs, extNs, pbrDutIP, extIP, 9998)
+		})
+
+		It("should not reach a VLAN-only peer without public_gateway", func() {
+			extVlan := setupExtVLAN(noPbrVlan, noPbrExtIP+"/24")
+			defer deleteLinkInNs(extNs, extVlan)
+
+			out, err := jmpShell("j", "dut-network", "add-address",
+				noPbrDutIP, "--vlan-id", fmt.Sprintf("%d", noPbrVlan))
+			Expect(err).NotTo(HaveOccurred(), out)
+
+			addDutAddr(noPbrDutIP)
+			defer func() {
+				delDutAddr(noPbrDutIP)
+				_, _ = jmpShell("j", "dut-network", "remove-address", noPbrDutIP)
+			}()
+
+			Expect(pingNS(dutNs, noPbrDutIP, noPbrExtIP)).To(HaveOccurred(),
+				"DUT should not reach VLAN-only %s without public_gateway/PBR", noPbrExtIP)
+			expectPingNS(dutNs, noPbrDutIP, extIP)
 		})
 	})
 })
@@ -321,4 +357,114 @@ func runInNsCapture(ns string, args ...string) (string, error) {
 	cmd := exec.Command(bin, cmdArgs...) //nolint:gosec
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+func deleteLinkInNs(ns, name string) {
+	_, _ = runInNsCapture(ns, "ip", "link", "del", name)
+}
+
+func setupVLANInNs(ns, parent string, id int, cidr string) string {
+	name := fmt.Sprintf("%s.%d", parent, id)
+	deleteLinkInNs(ns, name)
+	runInNs(ns, "ip", "link", "add", "link", parent, "name", name,
+		"type", "vlan", "id", fmt.Sprintf("%d", id))
+	runInNs(ns, "ip", "addr", "replace", cidr, "dev", name)
+	runInNs(ns, "ip", "link", "set", name, "up")
+	return name
+}
+
+func pingNS(ns, src, dst string) error {
+	args := []string{"ping", "-c", "1", "-W", "2"}
+	if src != "" {
+		args = append(args, "-I", src)
+	}
+	args = append(args, dst)
+	_, err := runInNsCapture(ns, args...)
+	return err
+}
+
+func expectPingNS(ns, src, dst string) {
+	GinkgoHelper()
+	Eventually(func() error {
+		return pingNS(ns, src, dst)
+	}, 10*time.Second, 1*time.Second).Should(Succeed(),
+		"namespace %s src %q should ping %s", ns, src, dst)
+}
+
+func tcpEchoServerScript(bind string, port int) string {
+	return fmt.Sprintf(
+		"import socket; "+
+			"s=socket.socket(); "+
+			"s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); "+
+			"s.bind(('%s',%d)); "+
+			"s.listen(1); "+
+			"s.settimeout(10); "+
+			"conn,_=s.accept(); "+
+			"conn.sendall(b'E2E_OK'); "+
+			"conn.close(); "+
+			"s.close()",
+		bind, port)
+}
+
+func tcpEchoClientScript(src, dst string, port int) string {
+	if src == "" {
+		return fmt.Sprintf(
+			"import socket; "+
+				"s=socket.create_connection(('%s',%d),timeout=5); "+
+				"data=s.recv(10); "+
+				"s.close(); "+
+				"print(data.decode())",
+			dst, port)
+	}
+	return fmt.Sprintf(
+		"import socket; "+
+			"s=socket.socket(); "+
+			"s.settimeout(5); "+
+			"s.bind(('%s',0)); "+
+			"s.connect(('%s',%d)); "+
+			"data=s.recv(10); "+
+			"s.close(); "+
+			"print(data.decode())",
+		src, dst, port)
+}
+
+func startPythonInNs(ns, script string) (*exec.Cmd, error) {
+	fullArgs := []string{"ip", "netns", "exec", ns, "python3", "-c", script}
+	bin, cmdArgs := sudoArgs(fullArgs...)
+	cmd := exec.Command(bin, cmdArgs...) //nolint:gosec
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+func stopProcessGroup(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = cmd.Wait()
+}
+
+func tcpEchoBetweenNS(dutNs, extNs, src, dst string, port int) (string, error) {
+	bind := ""
+	if src != "" {
+		bind = dst
+	}
+	listener, err := startPythonInNs(extNs, tcpEchoServerScript(bind, port))
+	if err != nil {
+		return "", err
+	}
+	defer stopProcessGroup(listener)
+	time.Sleep(500 * time.Millisecond)
+	return runInNsCapture(dutNs, "python3", "-c", tcpEchoClientScript(src, dst, port))
+}
+
+func expectTCPEcho(dutNs, extNs, src, dst string, port int) {
+	GinkgoHelper()
+	out, err := tcpEchoBetweenNS(dutNs, extNs, src, dst, port)
+	Expect(err).NotTo(HaveOccurred(),
+		fmt.Sprintf("TCP %s -> %s:%d failed: %s", src, dst, port, out))
+	Expect(out).To(ContainSubstring("E2E_OK"))
 }
