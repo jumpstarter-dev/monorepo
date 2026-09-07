@@ -79,7 +79,7 @@ docs = [
     "pyyaml>=6.0",
 ]
 dev = [
-    "ruff==0.15.22",
+    "ruff==0.16.6",
     "typos>=1.23.6",
     "pre-commit>=3.8.0",
     "esbonio>=0.16.5",
