@@ -62,8 +62,17 @@ import (
 const (
 	annotationSurplusSince = "exporterset.jumpstarter.dev/surplus-since"
 
-	// Bridges the grandparent lookup (ExporterSet -> Exporter -> Pod).
+	// Bridges the grandparent lookup (ExporterSet -> Exporter -> Pod), and
+	// tells clients which pool an exporter came from: membership otherwise
+	// lives only in ownerReferences, which the client API does not expose.
 	labelExporterSetName = "exporterset.jumpstarter.dev/name"
+
+	// The VirtualTargetClass backing the pool, and the provisioner that
+	// class names, so clients can tell how an exporter is provisioned without
+	// cluster access. The provisioner is a property of the class, which a
+	// client cannot read, so it has to be carried here.
+	labelVirtualTargetClass = "exporterset.jumpstarter.dev/class"
+	labelProvisioner        = "exporterset.jumpstarter.dev/provisioner"
 
 	defaultScaleDownCooldown = 5 * time.Minute
 
@@ -204,6 +213,12 @@ func (r *ExporterSetReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	// Keep identity labels current on exporters created before them, or after
+	// the set's class changed.
+	if err := r.reconcileExporterLabels(ctx, &exporterSet, ownedExporters); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Single Pod List shared by terminal cleanup and ensureExporterPods.
 	podsByExporter, err := r.listPodsGroupedByExporter(ctx, &exporterSet)
 	if err != nil {
@@ -335,7 +350,7 @@ func (r *ExporterSetReconciler) scaleUp(
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: es.Name + "-",
 				Namespace:    es.Namespace,
-				Labels:       maps.Clone(es.Spec.Template.Metadata.Labels),
+				Labels:       r.exporterLabels(es),
 				Annotations:  maps.Clone(es.Spec.Template.Metadata.Annotations),
 			},
 			Spec: jumpstarterdevv1alpha1.ExporterSpec{
@@ -917,6 +932,72 @@ func (r *ExporterSetReconciler) clearSurplusAnnotation(ctx context.Context, es *
 	if err := r.Update(ctx, es); err != nil && !apierrors.IsConflict(err) {
 		log.FromContext(ctx).Error(err, "failed to clear surplus-since annotation")
 	}
+}
+
+// identityLabels mark which pool an exporter belongs to and how it is
+// provisioned. Reconcile has already established that the referenced class
+// names this reconciler's provisioner, so it is the provisioner in effect.
+func (r *ExporterSetReconciler) identityLabels(
+	es *virtualtargetv1alpha1.ExporterSet,
+) map[string]string {
+	labels := map[string]string{labelExporterSetName: es.Name}
+	if es.Spec.VirtualTargetClassName != "" {
+		labels[labelVirtualTargetClass] = es.Spec.VirtualTargetClassName
+	}
+	if r.Provisioner != nil {
+		labels[labelProvisioner] = r.Provisioner.Name()
+	}
+	return labels
+}
+
+// exporterLabels are the labels an Exporter of this set carries: the set's
+// template labels plus the identity labels above.
+func (r *ExporterSetReconciler) exporterLabels(
+	es *virtualtargetv1alpha1.ExporterSet,
+) map[string]string {
+	labels := maps.Clone(es.Spec.Template.Metadata.Labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	maps.Copy(labels, r.identityLabels(es))
+	return labels
+}
+
+// reconcileExporterLabels stamps the identity labels on exporters that predate
+// them, so a pool created before this controller version becomes groupable by
+// clients without waiting for its exporters to be recycled.
+func (r *ExporterSetReconciler) reconcileExporterLabels(
+	ctx context.Context,
+	es *virtualtargetv1alpha1.ExporterSet,
+	owned []jumpstarterdevv1alpha1.Exporter,
+) error {
+	logger := log.FromContext(ctx)
+
+	desired := r.identityLabels(es)
+
+	for i := range owned {
+		exporter := &owned[i]
+		missing := map[string]string{}
+		for key, value := range desired {
+			if exporter.Labels[key] != value {
+				missing[key] = value
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+
+		patch := client.MergeFrom(exporter.DeepCopy())
+		if exporter.Labels == nil {
+			exporter.Labels = map[string]string{}
+		}
+		maps.Copy(exporter.Labels, missing)
+		if err := r.Patch(ctx, exporter, patch); err != nil {
+			return fmt.Errorf("unable to label Exporter %s: %w", exporter.Name, err)
+		}
+		logger.Info("stamped exporter set labels", "exporter", exporter.Name, "labels", missing)
+	}
+	return nil
 }
 
 func (r *ExporterSetReconciler) listOwnedExporters(
