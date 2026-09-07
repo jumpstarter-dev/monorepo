@@ -6,7 +6,7 @@ from . import telemetry_pb2 as jumpstarter_dot_v1_dot_telemetry__pb2
 
 
 class TelemetryServiceStub:
-    """A service that receives structured logs from exporters and clients.
+    """A service that reverse-scrapes exporter metrics and receives structured logs.
     Implemented by jumpstarter-telemetry; not part of the controller.
     """
 
@@ -16,6 +16,11 @@ class TelemetryServiceStub:
         Args:
             channel: A grpc.Channel.
         """
+        self.MetricsStream = channel.stream_stream(
+                '/jumpstarter.v1.TelemetryService/MetricsStream',
+                request_serializer=jumpstarter_dot_v1_dot_telemetry__pb2.MetricsStreamRequest.SerializeToString,
+                response_deserializer=jumpstarter_dot_v1_dot_telemetry__pb2.MetricsStreamResponse.FromString,
+                _registered_method=True)
         self.PushLogs = channel.unary_unary(
                 '/jumpstarter.v1.TelemetryService/PushLogs',
                 request_serializer=jumpstarter_dot_v1_dot_telemetry__pb2.PushLogsRequest.SerializeToString,
@@ -24,9 +29,17 @@ class TelemetryServiceStub:
 
 
 class TelemetryServiceServicer:
-    """A service that receives structured logs from exporters and clients.
+    """A service that reverse-scrapes exporter metrics and receives structured logs.
     Implemented by jumpstarter-telemetry; not part of the controller.
     """
+
+    def MetricsStream(self, request_iterator, context):
+        """Persistent bidirectional stream: telemetry sends scrape requests,
+        exporter responds with full metric snapshots (OpenMetrics text).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
 
     def PushLogs(self, request, context):
         """Push structured log entries to the telemetry service for Loki ingest.
@@ -38,6 +51,11 @@ class TelemetryServiceServicer:
 
 def add_TelemetryServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'MetricsStream': grpc.stream_stream_rpc_method_handler(
+                    servicer.MetricsStream,
+                    request_deserializer=jumpstarter_dot_v1_dot_telemetry__pb2.MetricsStreamRequest.FromString,
+                    response_serializer=jumpstarter_dot_v1_dot_telemetry__pb2.MetricsStreamResponse.SerializeToString,
+            ),
             'PushLogs': grpc.unary_unary_rpc_method_handler(
                     servicer.PushLogs,
                     request_deserializer=jumpstarter_dot_v1_dot_telemetry__pb2.PushLogsRequest.FromString,
@@ -52,9 +70,36 @@ def add_TelemetryServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class TelemetryService:
-    """A service that receives structured logs from exporters and clients.
+    """A service that reverse-scrapes exporter metrics and receives structured logs.
     Implemented by jumpstarter-telemetry; not part of the controller.
     """
+
+    @staticmethod
+    def MetricsStream(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/jumpstarter.v1.TelemetryService/MetricsStream',
+            jumpstarter_dot_v1_dot_telemetry__pb2.MetricsStreamRequest.SerializeToString,
+            jumpstarter_dot_v1_dot_telemetry__pb2.MetricsStreamResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
 
     @staticmethod
     def PushLogs(request,

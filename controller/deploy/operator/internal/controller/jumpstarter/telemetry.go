@@ -19,6 +19,7 @@ package jumpstarter
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -39,12 +40,21 @@ import (
 
 const (
 	telemetryPort              = 9093
+	telemetryMetricsPort       = 8080
 	telemetryCertSuffix        = "-telemetry-tls"
 	telemetryServiceName       = "jumpstarter-telemetry"
 	telemetryComponentApp      = "jumpstarter-telemetry"
 	telemetrySASuffix          = "-telemetry"
 	grpcPortName               = "grpc"
+	metricsPortName            = "metrics"
 	telemetryCARequeueInterval = 30 * time.Second
+)
+
+// JEP-0013 default allowlists used when spec.telemetry.metrics omits a field.
+var (
+	defaultTelemetryDriverTypeEnum = []string{"power", "storage", "network", "serial", "console", "video", "composite"}
+	defaultTelemetryExemplarKeys   = []string{"client", "lease_id"}
+	defaultTelemetryScrapeTimeout  = 7 * time.Second
 )
 
 // reconcileTelemetryDeploymentStage reconciles only the telemetry Deployment (and cleanup).
@@ -251,6 +261,12 @@ func (r *JumpstarterReconciler) reconcileTelemetryService(ctx context.Context, j
 					TargetPort: intstr.FromInt(telemetryPort),
 					Protocol:   corev1.ProtocolTCP,
 				},
+				{
+					Name:       metricsPortName,
+					Port:       int32(telemetryMetricsPort),
+					TargetPort: intstr.FromInt(telemetryMetricsPort),
+					Protocol:   corev1.ProtocolTCP,
+				},
 			},
 		},
 	}
@@ -293,6 +309,29 @@ func (r *JumpstarterReconciler) reconcileTelemetryService(ctx context.Context, j
 	return nil
 }
 
+// telemetryContainerArgs returns gRPC and HTTP flags for the telemetry binary.
+func telemetryContainerArgs(t *operatorv1alpha1.TelemetryConfig) []string {
+	timeout := defaultTelemetryScrapeTimeout
+	if t.Metrics.ScrapeTimeout != nil && t.Metrics.ScrapeTimeout.Duration > 0 {
+		timeout = t.Metrics.ScrapeTimeout.Duration
+	}
+	enum := t.Metrics.DriverTypeEnum
+	if len(enum) == 0 {
+		enum = defaultTelemetryDriverTypeEnum
+	}
+	keys := t.Metrics.ExemplarKeys
+	if len(keys) == 0 {
+		keys = defaultTelemetryExemplarKeys
+	}
+	return []string{
+		fmt.Sprintf("--grpc-bind=:%d", telemetryPort),
+		fmt.Sprintf("-metrics-bind-address=:%d", telemetryMetricsPort),
+		fmt.Sprintf("-scrape-timeout=%s", timeout),
+		fmt.Sprintf("-driver-type-enum=%s", strings.Join(enum, ",")),
+		fmt.Sprintf("-exemplar-keys=%s", strings.Join(keys, ",")),
+	}
+}
+
 // createTelemetryDeployment builds the desired Deployment for the telemetry service.
 // tlsSecretHash is included as a pod annotation to trigger rolling restarts on cert renewal.
 func createTelemetryDeployment(jumpstarter *operatorv1alpha1.Jumpstarter, tlsSecretHash string) *appsv1.Deployment {
@@ -324,6 +363,10 @@ func createTelemetryDeployment(jumpstarter *operatorv1alpha1.Jumpstarter, tlsSec
 					Key: "key",
 				},
 			},
+		},
+		{
+			Name:  "GRPC_TELEMETRY_ENDPOINT",
+			Value: telemetryEndpointFor(jumpstarter.Namespace),
 		},
 	}
 
@@ -390,22 +433,27 @@ func createTelemetryDeployment(jumpstarter *operatorv1alpha1.Jumpstarter, tlsSec
 							Image:           t.Image,
 							ImagePullPolicy: t.ImagePullPolicy,
 							Command:         []string{"/telemetry"},
-							Args: []string{
-								fmt.Sprintf("--grpc-bind=:%d", telemetryPort),
-							},
-							Env:          envVars,
-							VolumeMounts: volumeMounts,
+							Args:            telemetryContainerArgs(t),
+							Env:             envVars,
+							VolumeMounts:    volumeMounts,
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: int32(telemetryPort),
 									Name:          grpcPortName,
 									Protocol:      corev1.ProtocolTCP,
 								},
+								{
+									ContainerPort: int32(telemetryMetricsPort),
+									Name:          metricsPortName,
+									Protocol:      corev1.ProtocolTCP,
+								},
 							},
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
-									TCPSocket: &corev1.TCPSocketAction{
-										Port: intstr.FromInt(telemetryPort),
+									HTTPGet: &corev1.HTTPGetAction{
+										Path:   "/healthz",
+										Port:   intstr.FromInt(telemetryMetricsPort),
+										Scheme: corev1.URISchemeHTTP,
 									},
 								},
 								InitialDelaySeconds: 10,
@@ -416,8 +464,10 @@ func createTelemetryDeployment(jumpstarter *operatorv1alpha1.Jumpstarter, tlsSec
 							},
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
-									TCPSocket: &corev1.TCPSocketAction{
-										Port: intstr.FromInt(telemetryPort),
+									HTTPGet: &corev1.HTTPGetAction{
+										Path:   "/readyz",
+										Port:   intstr.FromInt(telemetryMetricsPort),
+										Scheme: corev1.URISchemeHTTP,
 									},
 								},
 								InitialDelaySeconds: 5,

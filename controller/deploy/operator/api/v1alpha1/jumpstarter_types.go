@@ -312,6 +312,10 @@ type TelemetryConfig struct {
 	// gRPC configuration for the telemetry service.
 	// Use this to configure TLS when not using cert-manager.
 	GRPC TelemetryGRPCConfig `json:"grpc,omitempty"`
+
+	// Metrics configures reverse-scrape fan-out and Prometheus exposition
+	// (JEP-0013). Loki and ServiceMonitor fields are later phases.
+	Metrics TelemetryMetricsConfig `json:"metrics,omitempty"`
 }
 
 // TelemetryGRPCConfig defines gRPC configuration for the telemetry service.
@@ -323,6 +327,22 @@ type TelemetryGRPCConfig struct {
 	// automatically managed by cert-manager.
 	// When spec.certManager.enabled is false, you can provide your own TLS secret here.
 	TLS TLSConfig `json:"tls,omitempty"`
+}
+
+// TelemetryMetricsConfig configures telemetry /metrics reverse-scrape behavior.
+type TelemetryMetricsConfig struct {
+	// Allowlist of keys to include in Prometheus exemplars. Unlisted keys are omitted.
+	// +kubebuilder:default={"client","lease_id"}
+	ExemplarKeys []string `json:"exemplarKeys,omitempty"`
+
+	// Allowed driver_type label values. Unlisted types are remapped to "other".
+	// +kubebuilder:default={"power","storage","network","serial","console","video","composite"}
+	DriverTypeEnum []string `json:"driverTypeEnum,omitempty"`
+
+	// Max wait for parallel exporter MetricsStream responses during a /metrics fan-out.
+	// Should be lower than the Prometheus scrape_timeout.
+	// +kubebuilder:default="7s"
+	ScrapeTimeout *metav1.Duration `json:"scrapeTimeout,omitempty"`
 }
 
 // TelemetryLoggingConfig configures the log push path to the telemetry service.

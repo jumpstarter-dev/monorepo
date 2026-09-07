@@ -48,11 +48,18 @@ RUN  --mount=type=cache,target=/opt/app-root/src/go/pkg/mod,sharing=locked,uid=1
      go build -a \
      -ldflags "-X main.version=${GIT_VERSION} -X main.gitCommit=${GIT_COMMIT} -X main.buildDate=${BUILD_DATE}" \
      -o router ./cmd/router
+RUN  --mount=type=cache,target=/opt/app-root/src/go/pkg/mod,sharing=locked,uid=1001,gid=0 \
+     --mount=type=cache,target=/opt/app-root/src/.cache/go-build,sharing=locked,uid=1001,gid=0 \
+     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+     go build -a \
+     -ldflags "-X main.version=${GIT_VERSION} -X main.gitCommit=${GIT_COMMIT} -X main.buildDate=${BUILD_DATE}" \
+     -o telemetry ./cmd/telemetry
 
 FROM registry.access.redhat.com/ubi9/ubi-micro:9.8-1787778798@sha256:f332c99eb8f798a8486821c91937f10ad64ee83d7e739303be2df051040918f6
 WORKDIR /
 COPY --from=builder /build/manager .
 COPY --from=builder /build/router  .
+COPY --from=builder /build/telemetry .
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

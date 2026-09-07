@@ -1326,7 +1326,8 @@ func (r *JumpstarterReconciler) buildConfig(ctx context.Context, jumpstarter *op
 		Keys: jumpstarter.Spec.DeprecatedLabels.Keys,
 	}
 
-	// Telemetry configuration.
+	// Telemetry configuration. When cert-manager is enabled, inline the CA so
+	// GetServiceEndpoints.certificate lets exporters verify telemetry TLS.
 	if jumpstarter.Spec.Telemetry != nil && jumpstarter.Spec.Telemetry.Enabled {
 		t := jumpstarter.Spec.Telemetry
 		telemetryCfg := &config.Telemetry{

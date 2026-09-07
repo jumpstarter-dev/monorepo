@@ -14,9 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// jumpstarter-telemetry receives structured log entries from exporters and clients
-// via the PushLogs gRPC RPC and writes them to structured stdout for downstream
-// log shippers (Promtail, Grafana Alloy, Vector) to forward to Loki.
+// jumpstarter-telemetry reverse-scrapes exporter metrics via MetricsStream and
+// receives structured log entries via PushLogs. Logs are written to structured
+// stdout for downstream log shippers (Promtail, Grafana Alloy, Vector).
+// Loki push is a later Phase 3 PR.
 //
 // TLS: always enabled. Set EXTERNAL_CERT_PEM and EXTERNAL_KEY_PEM to file paths of
 // operator-mounted cert/key (e.g. from a cert-manager Secret); when absent a
@@ -30,8 +31,7 @@ limitations under the License.
 // certificate; the controller uses it to advertise the address to exporters via
 // GetServiceEndpoints. A mismatch causes TLS hostname verification failures.
 //
-// Future phases will add direct Loki push and MetricsStream for reverse-scrape
-// of exporter prometheus_client registries.
+// HTTP: GET /metrics, /healthz, and /readyz bind separately (default :8080).
 package main
 
 import (
@@ -39,7 +39,9 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -55,9 +57,36 @@ var (
 	buildDate = "unknown"
 )
 
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func main() {
 	var bindAddr string
+	var metricsAddr string
+	var scrapeTimeout time.Duration
+	var driverTypeEnum string
+	var exemplarKeys string
 	flag.StringVar(&bindAddr, "grpc-bind", ":9093", "TCP address to bind the gRPC server to")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
+		"TCP address for HTTP GET /metrics, /healthz, and /readyz. Use 0 to disable.")
+	flag.DurationVar(&scrapeTimeout, "scrape-timeout", 7*time.Second,
+		"Max wait for parallel MetricsStream scrape responses")
+	flag.StringVar(&driverTypeEnum, "driver-type-enum", strings.Join(service.DefaultDriverTypeEnum, ","),
+		"Comma-separated allowlist of driver_type values; others are remapped to other")
+	flag.StringVar(&exemplarKeys, "exemplar-keys", strings.Join(service.DefaultExemplarKeys, ","),
+		"Comma-separated allowlist of Prometheus exemplar keys")
 
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
@@ -71,6 +100,8 @@ func main() {
 		"gitCommit", gitCommit,
 		"buildDate", buildDate,
 		"bindAddr", bindAddr,
+		"metricsBindAddr", metricsAddr,
+		"scrapeTimeout", scrapeTimeout,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -87,8 +118,12 @@ func main() {
 	}
 
 	svc := &service.TelemetryService{
-		BindAddr: bindAddr,
-		Signer:   signer,
+		BindAddr:        bindAddr,
+		MetricsBindAddr: metricsAddr,
+		ScrapeTimeout:   scrapeTimeout,
+		DriverTypeEnum:  splitCSV(driverTypeEnum),
+		ExemplarKeys:    splitCSV(exemplarKeys),
+		Signer:          signer,
 	}
 
 	// Register signal handler before starting the service so no signal
