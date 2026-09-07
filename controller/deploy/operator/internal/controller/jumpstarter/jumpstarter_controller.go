@@ -65,6 +65,21 @@ type JumpstarterReconciler struct {
 	Scheme             *runtime.Scheme
 	EndpointReconciler *endpoints.Reconciler
 	Recorder           record.EventRecorder
+	Version            string
+}
+
+// resolveImage replaces the :latest tag with the operator's own version tag.
+// If the operator version is unknown ("dev") or the image uses a non-latest tag
+// (admin override), the image is returned unchanged.
+func (r *JumpstarterReconciler) resolveImage(image string) string {
+	if r.Version == "" || r.Version == "dev" {
+		return image
+	}
+	version := strings.TrimPrefix(r.Version, "v")
+	if base, ok := strings.CutSuffix(image, ":latest"); ok {
+		return base + ":" + version
+	}
+	return image
 }
 
 // +kubebuilder:rbac:groups=operator.jumpstarter.dev,resources=jumpstarters,verbs=get;list;watch;create;update;patch;delete
@@ -948,7 +963,7 @@ func (r *JumpstarterReconciler) createControllerDeployment(jumpstarter *operator
 					Containers: []corev1.Container{
 						{
 							Name:            "manager",
-							Image:           jumpstarter.Spec.Controller.Image,
+							Image:           r.resolveImage(jumpstarter.Spec.Controller.Image),
 							ImagePullPolicy: jumpstarter.Spec.Controller.ImagePullPolicy,
 							Args: []string{
 								"--leader-elect",
@@ -1172,7 +1187,7 @@ func (r *JumpstarterReconciler) createRouterDeployment(jumpstarter *operatorv1al
 					Containers: []corev1.Container{
 						{
 							Name:            "router",
-							Image:           jumpstarter.Spec.Routers.Image,
+							Image:           r.resolveImage(jumpstarter.Spec.Routers.Image),
 							ImagePullPolicy: jumpstarter.Spec.Routers.ImagePullPolicy,
 							Command:         []string{"/router"},
 							Args: []string{
