@@ -159,24 +159,6 @@ var _ = Describe("ExporterSet QEMU E2E Tests", Label("exporterset-qemu"), Ordere
 	})
 
 	It("leases, flashes Alpine, and boots to a console login marker", func() {
-		By("waiting for a Running pod so we can read shared volume SizeLimit")
-		Eventually(func() string {
-			return KubectlQuery("-n", ns, "get", "pod",
-				"-l", guest.Selector,
-				"--field-selector=status.phase=Running",
-				"-o", "jsonpath={.items[0].metadata.name}")
-		}, 2*time.Minute, qemuPollPeriod).ShouldNot(BeEmpty())
-
-		sizeLimit := KubectlQuery("-n", ns, "get", "pod",
-			"-l", guest.Selector,
-			"--field-selector=status.phase=Running",
-			"-o", "jsonpath={.items[0].spec.volumes[?(@.name==\"shared\")].emptyDir.sizeLimit}")
-		// Without the storage follow-up (#924), SizeLimit stays at 100Mi and
-		// flashing Alpine evicts the Pod. Skip until capacity is available.
-		if sizeLimit == "" || sizeLimit == "100Mi" {
-			Skip(fmt.Sprintf("shared emptyDir SizeLimit=%q is too small for Alpine flash; needs #924 storage work", sizeLimit))
-		}
-
 		By("running flash+boot helper under jmp shell")
 		// Long timeout: Kind uses TCG emulation without KVM.
 		cmd := JmpCmd(

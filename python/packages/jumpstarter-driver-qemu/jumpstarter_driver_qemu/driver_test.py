@@ -206,6 +206,23 @@ def test_set_memory_size_invalid():
         driver.set_memory_size("invalid")
 
 
+def test_disk_dir_uses_tmp_by_default():
+    driver = Qemu()
+    assert driver._disk_dir == driver._tmp_dir.name
+
+
+def test_disk_dir_stays_with_shared_in_tests(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    driver = Qemu(launcher_socket=str(shared / "launcher.sock"))
+    assert driver._disk_dir == str(shared)
+
+
+def test_disk_dir_is_slash_disk_in_production_sidecar():
+    driver = Qemu(launcher_socket="/shared/launcher.sock")
+    assert driver._disk_dir == "/disk"
+
+
 def test_cidata_uses_tmp_by_default():
     """Local mode keeps cloud-init vvfat content under a system temp dir."""
     driver = Qemu()

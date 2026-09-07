@@ -285,13 +285,15 @@ class QemuPower(PowerInterface, Driver):
         for device in devices:
             cmdline += ["-device", device]
 
-        if bios.exists():
+        if bios.exists() or self.parent._runtime_firmware_path(bios):
             cmdline += [
                 "-bios",
                 str(bios),
             ]
 
-        if ovmf_code.exists() and ovmf_vars.exists():
+        if (ovmf_code.exists() or self.parent._runtime_firmware_path(ovmf_code)) and (
+            ovmf_vars.exists() or self.parent._runtime_firmware_path(ovmf_vars)
+        ):
             cmdline += [
                 "-drive",
                 f"file={ovmf_code},if=pflash,format=raw,unit=0,readonly=on",
@@ -482,11 +484,24 @@ class Qemu(Driver):
 
     @property
     def _work_dir(self) -> str:
+        """Directory for sockets and jumpstarter-exec in sidecar mode."""
         if self.launcher_socket:
             # Sidecar: QEMU only sees the shared volume. Derive from the
             # socket path so production (/shared/launcher.sock) and tests
             # (tmpdir/shared/launcher.sock) both place cidata correctly.
             return str(Path(self.launcher_socket).parent)
+        return self._tmp_dir.name
+
+    @property
+    def _disk_dir(self) -> str:
+        """Directory for flashable guest disk images (root, bios, …)."""
+        if self.launcher_socket:
+            work = Path(self._work_dir)
+            # Production sidecar: shared volume for sockets, separate mount for guest disk.
+            # Keep in sync with Go constants in exporterset/provisioners/qemu and disk packages.
+            if work == Path("/shared"):
+                return "/disk"
+            return str(work)
         return self._tmp_dir.name
 
     @property
@@ -518,6 +533,10 @@ class Qemu(Driver):
     def _cid(self) -> int:
         return randbits(32)
 
+    def _runtime_firmware_path(self, path: Path) -> bool:
+        """True when path is a default firmware path that lives in the runtime image."""
+        return self.launcher_socket is not None and path in self.default_partitions.values()
+
     def validate_partition(
         self,
         partition: str | None = None,
@@ -525,13 +544,13 @@ class Qemu(Driver):
     ) -> Path:
         match partition:
             case "root" | None:
-                path = Path(self._work_dir) / "root"
+                path = Path(self._disk_dir) / "root"
             case "OVMF_CODE.fd":
-                path = Path(self._work_dir) / "OVMF_CODE.fd"
+                path = Path(self._disk_dir) / "OVMF_CODE.fd"
             case "OVMF_VARS.fd":
-                path = Path(self._work_dir) / "OVMF_VARS.fd"
+                path = Path(self._disk_dir) / "OVMF_VARS.fd"
             case "bios":
-                path = Path(self._work_dir) / "bios"
+                path = Path(self._disk_dir) / "bios"
             case _:
                 raise ValueError(f"invalid partition name: {partition}")
 

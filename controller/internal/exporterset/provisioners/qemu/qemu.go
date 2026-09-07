@@ -30,6 +30,7 @@ import (
 
 	jumpstarterdevv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/v1alpha1"
 	virtualtargetv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/virtualtarget/v1alpha1"
+	"github.com/jumpstarter-dev/jumpstarter/controller/internal/exporterset/disk"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -154,7 +155,10 @@ func (p *Provisioner) resolveImageSpec(spec *virtualtargetv1alpha1.ImageSpec, de
 //     Kubernetes terminates sidecars and the Pod completes.
 //     Pod restartPolicy is Never so a clean exporter exit is not
 //     restarted in-place (ExporterSet replaces the instance instead).
-//   - Shared emptyDir for Unix sockets (QMP, serial, launcher) and disk.
+//   - Shared emptyDir for Unix sockets (QMP, serial, launcher).
+//   - Guest disk volume at /disk (ephemeral PVC when
+//     parameters.storage.storageClassName is set, otherwise sized
+//     emptyDir with ephemeral-storage requests/limits).
 //
 // The caller (reconciler) is responsible for setting
 // OwnerReferences on the Pod and injecting the config volume.
@@ -171,6 +175,11 @@ func (p *Provisioner) RenderPod(
 	runAsRoot := int64(0)
 	runAsExporter := exporterNonRootUID
 	exporterNonRoot := true
+
+	diskSpec, err := disk.FromParameters(mergedParameters)
+	if err != nil {
+		return nil, err
+	}
 
 	var exporterSpec, runtimeSpec *virtualtargetv1alpha1.ImageSpec
 	if images != nil {
@@ -193,6 +202,8 @@ func (p *Provisioner) RenderPod(
 			),
 		})
 	}
+
+	diskMount := disk.Mount()
 
 	podMeta := metav1.ObjectMeta{
 		Namespace:   exporterSet.Namespace,
@@ -248,6 +259,7 @@ func (p *Provisioner) RenderPod(
 							Name:      sharedVolumeName,
 							MountPath: sharedMountPath,
 						},
+						diskMount,
 					},
 				},
 			},
@@ -275,6 +287,7 @@ func (p *Provisioner) RenderPod(
 							Name:      sharedVolumeName,
 							MountPath: sharedMountPath,
 						},
+						diskMount,
 					},
 				},
 			},
@@ -290,6 +303,8 @@ func (p *Provisioner) RenderPod(
 			},
 		},
 	}
+
+	pod.Spec.Volumes = append(pod.Spec.Volumes, disk.Volume(diskSpec))
 
 	// Apply scheduling from VirtualTargetClass.
 	// Clone maps and slices to avoid mutating the VTC's fields.
@@ -307,6 +322,24 @@ func (p *Provisioner) RenderPod(
 					pod.Spec.InitContainers[i].Resources = *vtc.Spec.Scheduling.Resources.DeepCopy()
 					break
 				}
+			}
+		}
+	}
+
+	if diskSpec.UsePVC() {
+		// fsGroup so the non-root exporter can write the ephemeral claim.
+		if pod.Spec.SecurityContext == nil {
+			pod.Spec.SecurityContext = &corev1.PodSecurityContext{}
+		}
+		pod.Spec.SecurityContext.FSGroup = &runAsExporter
+	} else {
+		// emptyDir guest disks consume node ephemeral storage. Reserve capacity
+		// on one container only — the scheduler sums requests from all containers
+		// (including restartable init containers / native sidecars).
+		for i := range pod.Spec.InitContainers {
+			if pod.Spec.InitContainers[i].Name == runtimeContainerName {
+				disk.SetEphemeralStorage(&pod.Spec.InitContainers[i].Resources, diskSpec.VolumeSize)
+				break
 			}
 		}
 	}
@@ -373,7 +406,7 @@ func enrichQemuDriver(d virtualtargetv1alpha1.DriverConfig, params map[string]in
 	setDefault(config, "arch", params, "arch")
 	setDefault(config, "smp", params, "resources.cpu")
 	setDefault(config, "mem", params, "resources.memory")
-	setDefault(config, "disk_size", params, "resources.storage")
+	setDefault(config, "disk_size", params, "storage.size")
 
 	// Inject default_partitions based on arch unless user explicitly set them.
 	if _, hasPartitions := config["default_partitions"]; !hasPartitions {

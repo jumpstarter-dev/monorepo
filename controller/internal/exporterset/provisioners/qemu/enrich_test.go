@@ -247,9 +247,11 @@ func TestEnrichExporterExport_defaultsFromMergedParameters(t *testing.T) {
 	params := map[string]interface{}{
 		"arch": "aarch64",
 		"resources": map[string]interface{}{
-			"cpu":     4,
-			"memory":  "4Gi",
-			"storage": "40Gi",
+			"cpu":    4,
+			"memory": "4Gi",
+		},
+		"storage": map[string]interface{}{
+			"size": "40Gi",
 		},
 	}
 

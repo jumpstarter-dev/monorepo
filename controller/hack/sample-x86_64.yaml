@@ -7,6 +7,12 @@
 # This creates:
 #   - A VirtualTargetClass for x86_64 QEMU VMs with KVM acceleration
 #   - An ExporterSet that manages a pool of virtual exporters
+#
+# Guest disk: sized emptyDir at /disk from parameters.storage.size
+# (with default fsOverhead and ephemeral-storage accounting). To use a
+# StorageClass, set parameters.storage.storageClassName — the provisioner
+# ephemeral PVC whose lifetime follows the Pod (ExitAndReplace).
+# ExporterSet.spec.parameters.storage deep-merges over the class.
 ---
 apiVersion: virtualtarget.jumpstarter.dev/v1alpha1
 kind: VirtualTargetClass
@@ -36,7 +42,12 @@ spec:
     resources:
       cpu: 2
       memory: 2Gi
-      storage: 20Gi
+    storage:
+      size: 20Gi
+      fsOverhead: "10%"
+    # storage:
+    #   storageClassName: "your-storage-class"
+    #   accessModes: ["ReadWriteOnce"]
 ---
 apiVersion: virtualtarget.jumpstarter.dev/v1alpha1
 kind: ExporterSet
@@ -50,6 +61,9 @@ spec:
   scaleDownCooldown: 5m
   recycleStrategy: ExitAndReplace
   virtualTargetClassName: qemu-x86-64
+  # parameters:
+  #   storage:
+  #     storageClassName: "override-sc"  # override class; "" forces emptyDir
   selector:
     matchLabels:
       board: x86-64-virtual

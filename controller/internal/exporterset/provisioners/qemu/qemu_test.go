@@ -22,6 +22,7 @@ import (
 
 	jumpstarterdevv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/v1alpha1"
 	virtualtargetv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/virtualtarget/v1alpha1"
+	"github.com/jumpstarter-dev/jumpstarter/controller/internal/exporterset/disk"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -98,18 +99,55 @@ func assertRenderPodMetadata(t *testing.T, pod *corev1.Pod, exporterSet *virtual
 
 func assertRenderPodSharedVolume(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
-	// Only shared volume — config volume is injected by the reconciler.
-	if len(pod.Spec.Volumes) != 1 {
-		t.Fatalf("expected 1 volume (shared), got %d", len(pod.Spec.Volumes))
+	// Shared emptyDir + guest disk emptyDir (default size). Config volume is
+	// injected by the reconciler.
+	if len(pod.Spec.Volumes) != 2 {
+		t.Fatalf("expected 2 volumes (shared + disk), got %d", len(pod.Spec.Volumes))
 	}
-	if pod.Spec.Volumes[0].EmptyDir == nil {
-		t.Fatal("expected shared emptyDir volume at index 0")
+	sharedVol := findVolumeByName(pod, sharedVolumeName)
+	if sharedVol == nil || sharedVol.EmptyDir == nil {
+		t.Fatalf("expected shared emptyDir volume, got %#v", sharedVol)
 	}
 	wantLimit := resource.MustParse(sharedVolumeSizeLimit)
-	if pod.Spec.Volumes[0].EmptyDir.SizeLimit == nil ||
-		!pod.Spec.Volumes[0].EmptyDir.SizeLimit.Equal(wantLimit) {
-		t.Errorf("SizeLimit = %v, want %v", pod.Spec.Volumes[0].EmptyDir.SizeLimit, wantLimit)
+	if sharedVol.EmptyDir.SizeLimit == nil ||
+		!sharedVol.EmptyDir.SizeLimit.Equal(wantLimit) {
+		t.Errorf("shared SizeLimit = %v, want %v", sharedVol.EmptyDir.SizeLimit, wantLimit)
 	}
+	diskVol := findVolumeByName(pod, disk.VolumeName)
+	if diskVol == nil || diskVol.EmptyDir == nil {
+		t.Fatalf("expected disk emptyDir volume, got %#v", diskVol)
+	}
+	wantLogical := resource.MustParse("10Gi")
+	wantVolume := resource.MustParse("11Gi") // default 10% fsOverhead
+	if diskVol.EmptyDir.SizeLimit == nil ||
+		!diskVol.EmptyDir.SizeLimit.Equal(wantVolume) {
+		t.Errorf("disk SizeLimit = %v, want %v (%v + 10%% overhead)", diskVol.EmptyDir.SizeLimit, wantVolume, wantLogical)
+	}
+
+	if _, ok := pod.Spec.Containers[0].Resources.Requests[corev1.ResourceEphemeralStorage]; ok {
+		t.Error("exporter should not reserve guest disk ephemeral-storage")
+	}
+	runtimeEphemeral := pod.Spec.InitContainers[1].Resources.Requests[corev1.ResourceEphemeralStorage]
+	if !runtimeEphemeral.Equal(wantVolume) {
+		t.Errorf("runtime ephemeral-storage request = %v, want %v", runtimeEphemeral, wantVolume)
+	}
+
+	assertDiskMount(t, runtimeContainerName, pod.Spec.InitContainers[1].VolumeMounts)
+	assertDiskMount(t, "exporter", pod.Spec.Containers[0].VolumeMounts)
+	for _, m := range pod.Spec.InitContainers[0].VolumeMounts {
+		if m.Name == disk.VolumeName {
+			t.Error("copy-jumpstarter-exec should not mount /disk")
+		}
+	}
+}
+
+func findVolumeByName(pod *corev1.Pod, name string) *corev1.Volume {
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == name {
+			return &pod.Spec.Volumes[i]
+		}
+	}
+	return nil
 }
 
 func assertRenderPodContainers(t *testing.T, pod *corev1.Pod) {
@@ -163,6 +201,16 @@ func assertSharedMount(t *testing.T, name string, mounts []corev1.VolumeMount) {
 		}
 	}
 	t.Errorf("%s missing VolumeMount %s -> %s; got %#v", name, sharedVolumeName, sharedMountPath, mounts)
+}
+
+func assertDiskMount(t *testing.T, name string, mounts []corev1.VolumeMount) {
+	t.Helper()
+	for _, m := range mounts {
+		if m.Name == disk.VolumeName && m.MountPath == disk.MountPath {
+			return
+		}
+	}
+	t.Errorf("%s missing VolumeMount %s -> %s; got %#v", name, disk.VolumeName, disk.MountPath, mounts)
 }
 
 func TestRenderPod_clonesSchedulingFromVTC(t *testing.T) {
@@ -419,5 +467,80 @@ func TestRenderPod_partialImageOverride(t *testing.T) {
 	}
 	if pod.Spec.Containers[0].Image != wantExporter {
 		t.Errorf("exporter image = %q, want %q", pod.Spec.Containers[0].Image, wantExporter)
+	}
+}
+
+func TestRenderPod_diskEphemeralWhenStorageClassSet(t *testing.T) {
+	exporterSet := &virtualtargetv1alpha1.ExporterSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-set", Namespace: "default"},
+	}
+	vtc := &virtualtargetv1alpha1.VirtualTargetClass{
+		Spec: virtualtargetv1alpha1.VirtualTargetClassSpec{
+			Provisioner: ProvisionerName,
+		},
+	}
+	params := map[string]interface{}{
+		"storage": map[string]interface{}{
+			"size":             "20Gi",
+			"storageClassName": "fast-ssd",
+		},
+	}
+
+	pod, err := New("dev").RenderPod(context.Background(), exporterSet, vtc, params, nil, nil)
+	if err != nil {
+		t.Fatalf("RenderPod() error = %v", err)
+	}
+
+	var diskVol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == disk.VolumeName {
+			diskVol = &pod.Spec.Volumes[i]
+			break
+		}
+	}
+	if diskVol == nil || diskVol.Ephemeral == nil || diskVol.Ephemeral.VolumeClaimTemplate == nil {
+		t.Fatalf("expected disk ephemeral volume, got %#v", diskVol)
+	}
+	claim := diskVol.Ephemeral.VolumeClaimTemplate.Spec
+	if claim.StorageClassName == nil || *claim.StorageClassName != "fast-ssd" {
+		t.Errorf("StorageClassName = %v, want fast-ssd", claim.StorageClassName)
+	}
+	want := resource.MustParse("22Gi") // 20Gi + default 10% fsOverhead
+	if !claim.Resources.Requests[corev1.ResourceStorage].Equal(want) {
+		t.Errorf("storage request = %v, want %v", claim.Resources.Requests[corev1.ResourceStorage], want)
+	}
+	if _, ok := pod.Spec.Containers[0].Resources.Requests[corev1.ResourceEphemeralStorage]; ok {
+		t.Error("PVC mode should not set ephemeral-storage for guest disk")
+	}
+	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.FSGroup == nil ||
+		*pod.Spec.SecurityContext.FSGroup != exporterNonRootUID {
+		t.Errorf("FSGroup = %v, want %d", pod.Spec.SecurityContext, exporterNonRootUID)
+	}
+}
+
+func TestRenderPod_diskEmptyDirUsesParamSize(t *testing.T) {
+	exporterSet := &virtualtargetv1alpha1.ExporterSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-set", Namespace: "default"},
+	}
+	vtc := &virtualtargetv1alpha1.VirtualTargetClass{
+		Spec: virtualtargetv1alpha1.VirtualTargetClassSpec{Provisioner: ProvisionerName},
+	}
+	params := map[string]interface{}{
+		"storage": map[string]interface{}{
+			"size":       "7Gi",
+			"fsOverhead": "0%",
+		},
+	}
+
+	pod, err := New("dev").RenderPod(context.Background(), exporterSet, vtc, params, nil, nil)
+	if err != nil {
+		t.Fatalf("RenderPod() error = %v", err)
+	}
+
+	want := resource.MustParse("7Gi")
+	diskVol := findVolumeByName(pod, disk.VolumeName)
+	if diskVol == nil || diskVol.EmptyDir == nil || diskVol.EmptyDir.SizeLimit == nil ||
+		!diskVol.EmptyDir.SizeLimit.Equal(want) {
+		t.Errorf("disk SizeLimit = %v, want %v", diskVol, want)
 	}
 }
