@@ -258,7 +258,7 @@ GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 # renovate: datasource=github-releases depName=kubernetes-sigs/kustomize extractVersion=^kustomize/(?<version>v\d+\.\d+\.\d+)$
 KUSTOMIZE_VERSION ?= v5.8.1
 # renovate: datasource=github-releases depName=kubernetes-sigs/controller-tools extractVersion=^(?<version>v\d+\.\d+\.\d+)$
-CONTROLLER_TOOLS_VERSION ?= v0.21.0
+CONTROLLER_TOOLS_VERSION ?= v0.22.0
 #ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
 ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller-runtime | awk -F'[v.]' '{printf "release-%d.%d", $$2, $$3}')
 #ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
