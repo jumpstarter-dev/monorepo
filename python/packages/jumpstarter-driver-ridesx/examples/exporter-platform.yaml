@@ -1,0 +1,37 @@
+apiVersion: jumpstarter.dev/v1alpha1
+kind: ExporterConfig
+metadata:
+  namespace: jumpstarter-lab
+  name: qualcomm-sa8775p
+endpoint: <endpoint>
+token: <token>
+export:
+  firmware:
+    type: "jumpstarter_driver_ridesx.qdl.driver.QualcommFlasher"
+    config:
+      soc_type: sa8775p
+      work_dir: /var/lib/jumpstarter/qualcomm
+      board_revision: v3
+      power_cycle_delay: 2.0
+    children:
+      tac:
+        ref: tac
+      serial:
+        ref: serial
+      sail:
+        ref: sail
+  tac:
+    type: "jumpstarter_driver_pyserial.driver.PySerial"
+    config:
+      url: "/dev/ttyACM0"
+      baudrate: 115200
+  serial:
+    type: "jumpstarter_driver_pyserial.driver.PySerial"
+    config:
+      url: "/dev/ttyUSB1"
+      baudrate: 115200
+  sail:
+    type: "jumpstarter_driver_pyserial.driver.PySerial"
+    config:
+      url: "/dev/ttyUSB2"
+      baudrate: 115200

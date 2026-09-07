@@ -57,6 +57,10 @@ async def copy_stream(
         if isinstance(e.__cause__, BrokenPipeError):
             # BrokenPipeError (EPIPE) = writing to a closed pipe during normal teardown
             logger.debug("stream copy interrupted (%s): %s", type(e).__name__, e)
+        elif isinstance(e, BrokenResourceError) and e.__cause__ is None:
+            # anyio raises BrokenResourceError(from None) when the underlying
+            # TCP socket is closed by the peer (e.g. pexpect/fdspawn teardown).
+            logger.debug("stream copy interrupted (%s): %s", type(e).__name__, e)
         else:
             logger.warning("stream copy interrupted (%s): %s", type(e).__name__, e)
             if e.__cause__ is not None:

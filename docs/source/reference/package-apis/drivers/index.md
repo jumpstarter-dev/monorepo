@@ -79,7 +79,7 @@ Drivers for flashing firmware and programming devices:
 - {doc}`Probe-RS <probe-rs>` (`jumpstarter-driver-probe-rs`) - Debug probe support
 - {doc}`ST-LINK MSD <stlink-msd>` (`jumpstarter-driver-stlink-msd`) - ST-LINK mass storage flasher for STM32
 - {doc}`U-Boot <uboot>` (`jumpstarter-driver-uboot`) - Universal Bootloader interface
-- {doc}`RideSX <ridesx>` (`jumpstarter-driver-ridesx`) - Flashing and power management for Qualcomm RideSX
+- {doc}`RideSX <ridesx>` (`jumpstarter-driver-ridesx`) - RideSX fastboot flashing, QDL platform updates, and power management for Qualcomm automotive SoCs
 
 ### Emulation
 

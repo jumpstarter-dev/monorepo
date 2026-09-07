@@ -16,8 +16,6 @@ from opendal import Operator
 from jumpstarter.client.decorators import driver_click_group
 from jumpstarter.common.exceptions import JumpstarterException
 
-PROMPT = "CMD >> "
-
 
 class RideSXFlashError(JumpstarterException):
     """User-facing flash operation failure."""

@@ -25,6 +25,9 @@ mosquitto = "mosquitto"
 # ser is short for "serialize" in variable names like ser_json_timedelta
 ser = "ser"
 
+# abl is a Qualcomm bootloader component (Application Boot Loader)
+abl = "abl"
+
 # iif/oif are standard nftables keywords (input/output interface)
 iif = "iif"
 oif = "oif"

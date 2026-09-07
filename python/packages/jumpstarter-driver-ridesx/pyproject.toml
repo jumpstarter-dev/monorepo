@@ -1,7 +1,7 @@
 [project]
 name = "jumpstarter-driver-ridesx"
 dynamic = ["version", "urls"]
-description = "Jumpstarter driver for Qualcomm RideSX"
+description = "Jumpstarter driver for Qualcomm RideSX and QDL platform flashing"
 readme = "README.md"
 license = "Apache-2.0"
 authors = [{ name = "Benny Zlotnik", email = "bzlotnik@redhat.com" }]
@@ -12,11 +12,15 @@ dependencies = [
     "jumpstarter-driver-opendal",
     "jumpstarter-driver-power",
     "jumpstarter-driver-pyserial",
+    "pyyaml>=6.0.2",
+    "pydantic>=2.0",
+    "pexpect>=4.9",
 ]
 
 [project.entry-points."jumpstarter.drivers"]
 RideSXDriver = "jumpstarter_driver_ridesx.driver:RideSXDriver"
 RideSXPowerDriver = "jumpstarter_driver_ridesx.driver:RideSXPowerDriver"
+QualcommFlasher = "jumpstarter_driver_ridesx.qdl.driver:QualcommFlasher"
 
 [tool.hatch.version]
 source = "vcs"

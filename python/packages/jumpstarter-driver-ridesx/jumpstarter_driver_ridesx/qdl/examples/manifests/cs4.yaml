@@ -1,0 +1,61 @@
+name: "SA8650P CS4 Firmware"
+description: "CS4 (8650 ADAS) QDL flash workflow"
+data:
+  folder: "r00010.1"
+steps:
+  - set_mode: edl
+    check_dmesg: "qcserial"
+
+  - sleep: 5
+
+  - name: "UFS provisioning"
+    retry_mode: edl
+    qdl:
+      storage: ufs
+      programmer: prog_firehose_ddr.elf
+      files:
+        - provision_default.xml
+
+  - sleep: 10
+
+  - set_mode: edl
+    check_dmesg: "qcserial"
+
+  - name: "Flash UFS"
+    retry_mode: edl
+    qdl:
+      storage: ufs
+      programmer: prog_firehose_ddr.elf
+      files:
+        - "rawprogram*.xml"
+        - "patch*.xml"
+
+  - sleep: 30
+
+  - set_mode: fastboot
+    check_dmesg: "Product: Android"
+
+  - name: "Flash ABL"
+    fastboot:
+      flash:
+        - partition: abl_a
+          file: qam8650p_abl_signed.elf
+        - partition: abl_b
+          file: qam8650p_abl_signed.elf
+
+  - name: "Flash CDT"
+    fastboot:
+      flash:
+        - partition: cdt
+          file: ufs/LEMANSAU_QAM_1.1.0.bin
+          revision: v1
+        - partition: cdt
+          file: ufs/LEMANSAU_QAM_1.1.0.bin
+          revision: v2
+        - partition: cdt
+          file: ufs/LEMANSAU_QAM_1.2.0.bin
+          revision: v3
+        - partition: cdt
+          file: ufs/LEMANSAU_QAM_1.2.0.bin
+          revision: v4
+      continue: true

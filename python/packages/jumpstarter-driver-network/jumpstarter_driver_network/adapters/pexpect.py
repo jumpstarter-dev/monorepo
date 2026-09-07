@@ -16,4 +16,7 @@ def PexpectAdapter(*, client: DriverClient, method: str = "connect"):
         try:
             yield fdspawn(sock)
         finally:
-            sock.close()
+            try:
+                sock.close()
+            except OSError:
+                pass  # fd already closed by fdspawn

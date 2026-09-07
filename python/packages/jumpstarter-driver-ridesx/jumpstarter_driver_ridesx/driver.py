@@ -8,6 +8,7 @@ from typing import Dict
 
 from jumpstarter_driver_opendal.driver import Opendal
 
+from .tac import PROMPT, send_power_commands_sequence
 from jumpstarter.common.exceptions import ConfigurationError
 from jumpstarter.common.fls import get_fls_binary
 from jumpstarter.driver import Driver, export
@@ -394,7 +395,7 @@ class RideSXDriver(Driver):
                     chunk = await stream.receive()
                     data += chunk
                 self.logger.debug(f"Command {command} acknowledged with 'ok'")
-                prompt = b"CMD >> "
+                prompt = PROMPT
                 while prompt not in data:
                     chunk = await stream.receive()
                     data += chunk
@@ -429,7 +430,7 @@ class RideSXPowerDriver(Driver):
             ("usbDevicePower 1", 0),
             ("gpio vbusdis1 0", 0.03),
         ]
-        await _send_power_commands_sequence(self.children["serial"], self.logger, commands)
+        await send_power_commands_sequence(self.children["serial"], self.logger, commands)
 
     @export
     async def off(self):
@@ -440,7 +441,7 @@ class RideSXPowerDriver(Driver):
             ("usbDevicePower 1", 0),
             ("devicePower 0", 0.5),
         ]
-        await _send_power_commands_sequence(self.children["serial"], self.logger, commands)
+        await send_power_commands_sequence(self.children["serial"], self.logger, commands)
 
     @export
     async def cycle(self, delay: float = 2):
@@ -454,23 +455,3 @@ class RideSXPowerDriver(Driver):
     async def rescue(self):
         """Rescue mode - not implemented for RideSX"""
         raise NotImplementedError("Rescue mode not available for RideSX")
-
-
-async def _send_power_command(serial, logger, command: str):
-    """Send a power command to the device via serial"""
-    async with serial.connect() as stream:
-        logger.info(f"Executing power command: {command}")
-        await stream.send(f"{command}\r".encode())
-        data = b""
-        while b"ok" not in data:
-            chunk = await stream.receive()
-            data += chunk
-        logger.debug(f"Command {command} acknowledged with 'ok'")
-
-
-async def _send_power_commands_sequence(serial, logger, commands):
-    """Send a sequence of power commands with delays"""
-    for command, delay in commands:
-        await _send_power_command(serial, logger, command)
-        if delay > 0:
-            await asyncio.sleep(delay)

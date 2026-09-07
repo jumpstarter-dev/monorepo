@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import warnings
 from abc import ABCMeta, abstractmethod
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from os import PathLike
@@ -12,6 +12,7 @@ from typing import Any, Callable, Literal, Mapping, cast
 import click
 from anyio import BrokenResourceError, EndOfStream
 from anyio.abc import ObjectStream
+from pydantic import BaseModel
 
 from jumpstarter.client import DriverClient
 from jumpstarter.client.adapters import blocking
@@ -21,6 +22,43 @@ from jumpstarter.streams.encoding import Compression
 from jumpstarter.streams.progress import ProgressAttribute
 
 PathBuf = str | PathLike
+
+
+class FlashPhase:
+    """Standard phase constants for ``FlashStatus`` updates."""
+
+    DOWNLOAD = "download"
+    """Firmware archive is being received / downloaded."""
+
+    EXTRACT = "extract"
+    """Archive is being extracted to disk."""
+
+    STEP = "step"
+    """A manifest step (QDL, fastboot, mode switch, etc.) is running."""
+
+    CACHE = "cache"
+    """Cached firmware is being reused or has been stored."""
+
+    COMPLETE = "complete"
+    """The flash operation finished successfully."""
+
+    ERROR = "error"
+    """The flash operation failed."""
+
+
+class FlashStatus(BaseModel):
+    """Progress update emitted during a streaming flash operation."""
+
+    phase: str
+    message: str
+    step_index: int | None = None
+    total_steps: int | None = None
+    step_name: str | None = None
+    progress: float | None = None
+    bytes_transferred: int | None = None
+    bytes_total: int | None = None
+    stdout: str | None = None
+    stderr: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -288,3 +326,120 @@ class FlasherClient(FlasherClientInterface, DriverClient):
         else:
             with _local_file_adapter(client=self, path=local_path, mode="wb", compression=compression) as handle:
                 return self.call("dump", handle, target)
+
+
+class StreamingFlasherClientInterface(FlasherClientInterface):
+    @abstractmethod
+    def flash_stream(
+        self,
+        path: PathBuf,
+        *,
+        manifest: Any | None = None,
+        compression: Compression | None = None,
+    ) -> Generator[FlashStatus, None, None]:
+        """Flash image to DUT, yielding progress updates."""
+        ...
+
+
+class StreamingFlasherClient(FlasherClient, StreamingFlasherClientInterface):
+    def _iter_flash_status(
+        self,
+        *,
+        handle: Any,
+        manifest: Any | None,
+    ) -> Generator[FlashStatus, None, None]:
+        for value in self.streamingcall("flash", handle, manifest):
+            status = FlashStatus.model_validate(value)
+            yield status
+            if status.phase == FlashPhase.ERROR:
+                raise RuntimeError(status.message)
+
+    def flash_stream(
+        self,
+        path: PathBuf,
+        *,
+        manifest: Any | None = None,
+        compression: Compression | None = None,
+    ) -> Generator[FlashStatus, None, None]:
+        local_path, url = _parse_path(path)
+
+        if url is not None:
+            if compression is not None:
+                warnings.warn(
+                    "compression parameter is ignored for HTTP URLs",
+                    stacklevel=2,
+                )
+            with _http_url_adapter(client=self, url=url, mode="rb") as handle:
+                yield from self._iter_flash_status(handle=handle, manifest=manifest)
+        else:
+            with _local_file_adapter(client=self, path=local_path, mode="rb", compression=compression) as handle:
+                yield from self._iter_flash_status(handle=handle, manifest=manifest)
+
+    def flash(
+        self,
+        path: PathBuf | dict[str, PathBuf],
+        *,
+        target: str | None = None,
+        compression: Compression | None = None,
+    ) -> FlashStatus:
+        if isinstance(path, dict):
+            from jumpstarter.common.exceptions import ArgumentError
+
+            raise ArgumentError("StreamingFlasherClient does not support multi-target flash mappings")
+
+        if target is not None:
+            from jumpstarter.common.exceptions import ArgumentError
+
+            raise ArgumentError("'target' parameter is not supported by StreamingFlasherClient")
+
+        last: FlashStatus | None = None
+        for status in self.flash_stream(path, compression=compression):
+            last = status
+        if last is None:
+            raise RuntimeError("flash completed without status updates")
+        if last.phase != FlashPhase.COMPLETE:
+            raise RuntimeError(last.message or "flash did not complete successfully")
+        return last
+
+    @staticmethod
+    def render_flash_status(status: FlashStatus, *, verbose: bool = False) -> str:
+        parts = [status.phase.upper(), status.message]
+        if status.step_index is not None and status.total_steps is not None:
+            parts.append(f"step {status.step_index}/{status.total_steps}")
+        if status.step_name:
+            parts.append(status.step_name)
+        if status.progress is not None:
+            parts.append(f"{status.progress * 100:.1f}%")
+        if status.bytes_transferred is not None and status.bytes_total is not None:
+            parts.append(f"{status.bytes_transferred}/{status.bytes_total} bytes")
+        result = " | ".join(parts)
+        if verbose:
+            if status.stdout:
+                result += f"\n  [stdout] {status.stdout.rstrip()}"
+            if status.stderr:
+                result += f"\n  [stderr] {status.stderr.rstrip()}"
+        return result
+
+    def cli(self) -> click.Group:
+        @driver_click_group(self)
+        def base():
+            """Streaming flasher interface"""
+            pass
+
+        @base.command()
+        @click.argument("file")
+        @click.option("--compression", type=click.Choice(Compression, case_sensitive=False))
+        def flash(file, compression):
+            """Flash image to DUT with progress updates"""
+            for status in self.flash_stream(file, compression=compression):
+                click.echo(self.render_flash_status(status))
+
+        @base.command()
+        @click.argument("file")
+        @click.option("--target", type=str)
+        @click.option("--compression", type=click.Choice(Compression, case_sensitive=False))
+        def dump(file, target, compression):
+            """Dump image from DUT to file"""
+            super().dump(file, target=target, compression=compression)
+
+        return base

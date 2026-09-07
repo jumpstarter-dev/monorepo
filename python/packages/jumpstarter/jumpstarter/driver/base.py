@@ -409,7 +409,9 @@ class Driver(
                 timeout=timeout, allow_redirects=False,
             ) as resp:
                 if resp.status not in (301, 302, 303, 307, 308):
-                    async with AiohttpStreamReaderStream(reader=resp.content) as stream:
+                    async with AiohttpStreamReaderStream(
+                        reader=resp.content, content_length=resp.content_length,
+                    ) as stream:
                         yield ProgressStream(stream=stream, logging=True)
                         return
                 location = resp.headers.get("Location", "")

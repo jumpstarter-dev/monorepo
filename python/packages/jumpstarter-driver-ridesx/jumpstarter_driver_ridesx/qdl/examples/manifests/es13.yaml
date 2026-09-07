@@ -1,0 +1,75 @@
+name: "SA8775P ES13 Firmware"
+description: "ES13 firmware update package (QDL)"
+data:
+  folder: "r00022.2a"
+steps:
+  - set_mode: edl
+    check_dmesg: "qcserial"
+
+  - name: "UFS Provisioning"
+    retry_mode: edl
+    qdl:
+      storage: ufs
+      programmer: prog_firehose_ddr.elf
+      files:
+        - provision_default.xml
+
+  - sleep: 5
+
+  - set_mode: edl
+    check_dmesg: "qcserial"
+
+  - name: "Flash UFS"
+    retry_mode: edl
+    qdl:
+      storage: ufs
+      programmer: prog_firehose_ddr.elf
+      files:
+        - "rawprogram*.xml"
+        - "patch*.xml"
+
+  - sleep: 10
+
+  - set_mode: edl
+    check_dmesg: "qcserial"
+
+  - name: "Flash SPINOR"
+    retry_mode: edl
+    qdl:
+      storage: spinor
+      programmer: prog_firehose_ddr.elf
+      files:
+        - "rawprogram*.xml"
+
+  - sleep: 30
+
+  - set_mode: fastboot
+    check_dmesg: "Product: Android"
+
+  - name: "Flash perf hypervisor"
+    fastboot:
+      erase:
+        - hyp_a
+        - hyp_b
+      flash:
+        - partition: hyp_a
+          file: ufs/hypvmperformance.mbn
+        - partition: hyp_b
+          file: ufs/hypvmperformance.mbn
+
+  - name: "Flash CDT"
+    fastboot:
+      flash:
+        - partition: cdt
+          file: ufs/LEMANSAU_QAM_1.1.0.bin
+          revision: v1
+        - partition: cdt
+          file: ufs/LEMANSAU_QAM_1.1.0.bin
+          revision: v2
+        - partition: cdt
+          file: ufs/LEMANSAU_QAM_1.2.0.bin
+          revision: v3
+        - partition: cdt
+          file: ufs/LEMANSAU_QAM_1.2.0.bin
+          revision: v4
+      continue: true
