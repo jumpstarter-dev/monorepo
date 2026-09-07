@@ -149,20 +149,27 @@ var _ = Describe("Telemetry Lifecycle", func() {
 		Expect(deployment.Spec.Template.Spec.SecurityContext.RunAsNonRoot).NotTo(BeNil())
 		Expect(*deployment.Spec.Template.Spec.SecurityContext.RunAsNonRoot).To(BeTrue())
 
-		By("verifying the Service exists")
+		By("verifying the Service exists with gRPC and metrics ports")
 		svc := &corev1.Service{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{
 			Name:      telemetryServiceName,
 			Namespace: crNamespace,
 		}, svc)).To(Succeed())
 		Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
-		Expect(svc.Spec.Ports).To(HaveLen(1))
-		Expect(svc.Spec.Ports[0].Port).To(Equal(int32(telemetryPort)))
-		Expect(svc.Spec.Ports[0].Name).To(Equal("grpc"))
 		Expect(svc.Spec.Selector).To(HaveKeyWithValue("app", "jumpstarter-telemetry"))
+
+		grpcP := namedServicePort(svc.Spec.Ports, grpcPortName)
+		Expect(grpcP).NotTo(BeNil(), "expected Service port named grpc")
+		Expect(grpcP.Port).To(Equal(int32(telemetryPort)))
+		Expect(grpcP.TargetPort.IntValue()).To(Equal(telemetryPort))
+
+		metricsP := namedServicePort(svc.Spec.Ports, metricsPortName)
+		Expect(metricsP).NotTo(BeNil(), "expected Service port named metrics (JEP-0013 /metrics scrape)")
+		Expect(metricsP.Port).To(Equal(int32(telemetryMetricsPort)))
+		Expect(metricsP.TargetPort.IntValue()).To(Equal(telemetryMetricsPort))
 	})
 
-	It("includes liveness and readiness probes on the telemetry container", func() {
+	It("uses HTTP /healthz and /readyz on the metrics port (JEP-0013 DD-7)", func() {
 		By("creating a Jumpstarter CR with telemetry enabled")
 		spec := makeJumpstarterSpec()
 		spec.Telemetry = &operatorv1alpha1.TelemetryConfig{
@@ -184,15 +191,17 @@ var _ = Describe("Telemetry Lifecycle", func() {
 
 		container := deployment.Spec.Template.Spec.Containers[0]
 
-		By("verifying liveness probe uses TCP on the gRPC port")
+		By("verifying liveness probe is HTTP GET /healthz on the metrics port")
 		Expect(container.LivenessProbe).NotTo(BeNil())
-		Expect(container.LivenessProbe.TCPSocket).NotTo(BeNil())
-		Expect(container.LivenessProbe.TCPSocket.Port.IntValue()).To(Equal(telemetryPort))
+		Expect(container.LivenessProbe.HTTPGet).NotTo(BeNil())
+		Expect(container.LivenessProbe.HTTPGet.Path).To(Equal("/healthz"))
+		Expect(container.LivenessProbe.HTTPGet.Port.IntValue()).To(Equal(telemetryMetricsPort))
 
-		By("verifying readiness probe uses TCP on the gRPC port")
+		By("verifying readiness probe is HTTP GET /readyz on the metrics port")
 		Expect(container.ReadinessProbe).NotTo(BeNil())
-		Expect(container.ReadinessProbe.TCPSocket).NotTo(BeNil())
-		Expect(container.ReadinessProbe.TCPSocket.Port.IntValue()).To(Equal(telemetryPort))
+		Expect(container.ReadinessProbe.HTTPGet).NotTo(BeNil())
+		Expect(container.ReadinessProbe.HTTPGet.Path).To(Equal("/readyz"))
+		Expect(container.ReadinessProbe.HTTPGet.Port.IntValue()).To(Equal(telemetryMetricsPort))
 	})
 
 	It("respects the replicas field", func() {
@@ -438,13 +447,14 @@ var _ = Describe("Telemetry Lifecycle", func() {
 
 		container := dep.Spec.Template.Spec.Containers[0]
 
-		// Should have CONTROLLER_KEY + TLS env vars
-		Expect(container.Env).To(HaveLen(3))
+		// CONTROLLER_KEY + GRPC_TELEMETRY_ENDPOINT + TLS env vars
+		Expect(container.Env).To(HaveLen(4))
 		envNames := make(map[string]string)
 		for _, env := range container.Env {
 			envNames[env.Name] = env.Value
 		}
 		Expect(envNames).To(HaveKey("CONTROLLER_KEY"))
+		Expect(envNames).To(HaveKey("GRPC_TELEMETRY_ENDPOINT"))
 		Expect(envNames).To(HaveKeyWithValue("EXTERNAL_CERT_PEM", "/tls/tls.crt"))
 		Expect(envNames).To(HaveKeyWithValue("EXTERNAL_KEY_PEM", "/tls/tls.key"))
 
@@ -485,13 +495,14 @@ var _ = Describe("Telemetry Lifecycle", func() {
 
 		container := dep.Spec.Template.Spec.Containers[0]
 
-		// Should have CONTROLLER_KEY + TLS env vars
-		Expect(container.Env).To(HaveLen(3))
+		// CONTROLLER_KEY + GRPC_TELEMETRY_ENDPOINT + TLS env vars
+		Expect(container.Env).To(HaveLen(4))
 		envNames := make(map[string]string)
 		for _, env := range container.Env {
 			envNames[env.Name] = env.Value
 		}
 		Expect(envNames).To(HaveKey("CONTROLLER_KEY"))
+		Expect(envNames).To(HaveKey("GRPC_TELEMETRY_ENDPOINT"))
 		Expect(envNames).To(HaveKeyWithValue("EXTERNAL_CERT_PEM", "/tls/tls.crt"))
 		Expect(envNames).To(HaveKeyWithValue("EXTERNAL_KEY_PEM", "/tls/tls.key"))
 
@@ -528,9 +539,15 @@ var _ = Describe("Telemetry Lifecycle", func() {
 
 		container := dep.Spec.Template.Spec.Containers[0]
 
-		// Only CONTROLLER_KEY should be set (no TLS env vars)
-		Expect(container.Env).To(HaveLen(1))
-		Expect(container.Env[0].Name).To(Equal("CONTROLLER_KEY"))
+		// CONTROLLER_KEY + GRPC_TELEMETRY_ENDPOINT (no TLS env vars)
+		Expect(container.Env).To(HaveLen(2))
+		envNames := make(map[string]string)
+		for _, env := range container.Env {
+			envNames[env.Name] = env.Value
+		}
+		Expect(envNames).To(HaveKey("CONTROLLER_KEY"))
+		Expect(envNames).To(HaveKey("GRPC_TELEMETRY_ENDPOINT"))
+		Expect(envNames).NotTo(HaveKey("EXTERNAL_CERT_PEM"))
 
 		// No volume mounts or volumes
 		Expect(container.VolumeMounts).To(BeEmpty())
@@ -1066,3 +1083,39 @@ var _ = Describe("telemetryCANeedsRequeue", func() {
 		Expect(r.telemetryCANeedsRequeue(ctx, js)).To(BeFalse())
 	})
 })
+
+func hasEnv(c corev1.Container, name string) bool {
+	for _, e := range c.Env {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func envValue(c corev1.Container, name string) string {
+	for _, e := range c.Env {
+		if e.Name == name {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+func namedContainerPort(ports []corev1.ContainerPort, name string) *corev1.ContainerPort {
+	for i := range ports {
+		if ports[i].Name == name {
+			return &ports[i]
+		}
+	}
+	return nil
+}
+
+func namedServicePort(ports []corev1.ServicePort, name string) *corev1.ServicePort {
+	for i := range ports {
+		if ports[i].Name == name {
+			return &ports[i]
+		}
+	}
+	return nil
+}

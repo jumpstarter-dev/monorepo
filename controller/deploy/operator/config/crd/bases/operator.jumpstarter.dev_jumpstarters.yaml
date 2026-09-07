@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: jumpstarters.operator.jumpstarter.dev
 spec:
   group: operator.jumpstarter.dev
@@ -1087,7 +1087,8 @@ spec:
                       Number of controller replicas to run.
                       Currently only 1 replica is supported because the controller uses in-memory
                       state for gRPC stream coordination (Dial/Listen). Values greater than 1 will
-                      be clamped to 1 with a warning. See issue 1013 for HA controller support.
+                      be clamped to 1 with a warning. See https://github.com/jumpstarter-dev/jumpstarter/issues/1013
+                      for the tracking issue on HA controller support.
                     format: int32
                     minimum: 1
                     type: integer
@@ -2099,6 +2100,18 @@ spec:
                   structured log entries from exporters via gRPC. The controller advertises the
                   telemetry endpoint to exporters so they can push logs without cluster credentials.
                 properties:
+                  backpressure:
+                    description: Backpressure configures the Loki log push ring buffer.
+                    properties:
+                      queueDepth:
+                        default: 10000
+                        description: |-
+                          Ring buffer depth for Loki log push. On overflow, dropped entries are
+                          replaced by a single drop-marker LogEntry.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    type: object
                   enabled:
                     default: false
                     description: |-
@@ -2162,6 +2175,70 @@ spec:
                             - critical
                             type: string
                         type: object
+                    type: object
+                  loki:
+                    description: |-
+                      Loki configures optional HTTP push of ingested logs to a Loki-compatible
+                      endpoint. When url is empty, telemetry runs metrics-only.
+                    properties:
+                      secretRef:
+                        description: |-
+                          Secret with Loki credentials (username/password and/or token keys).
+                          See JEP-0013 DD-5: only the telemetry pod holds Loki credentials.
+                        type: string
+                      tls:
+                        description: TLS settings for the Loki endpoint.
+                        properties:
+                          caSecretRef:
+                            description: Secret containing a CA bundle (ca.crt key)
+                              to trust for the Loki endpoint.
+                            type: string
+                          insecureSkipVerify:
+                            default: false
+                            description: Disable TLS certificate verification (development/testing
+                              only).
+                            type: boolean
+                        type: object
+                      url:
+                        description: |-
+                          Loki push endpoint (http:// or https://). Optional — telemetry can run
+                          metrics-only without Loki. grpc:// is reserved but not implemented yet.
+                        type: string
+                    type: object
+                  metrics:
+                    description: |-
+                      Metrics configures reverse-scrape fan-out and Prometheus exposition
+                      (JEP-0013). ServiceMonitor fields are a later phase.
+                    properties:
+                      driverTypeEnum:
+                        default:
+                        - power
+                        - storage
+                        - network
+                        - serial
+                        - console
+                        - video
+                        - composite
+                        description: Allowed driver_type label values. Unlisted types
+                          are remapped to "other".
+                        items:
+                          type: string
+                        type: array
+                      exemplarKeys:
+                        default:
+                        - client
+                        - lease_id
+                        description: Allowlist of keys to include in Prometheus exemplars.
+                          Unlisted keys are omitted.
+                        items:
+                          type: string
+                        type: array
+                      scrapeTimeout:
+                        default: 7s
+                        description: |-
+                          Max wait for parallel exporter MetricsStream responses during a /metrics fan-out.
+                          Should be lower than the Prometheus scrape_timeout.
+                        type: string
                     type: object
                   replicas:
                     default: 1
