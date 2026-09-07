@@ -3,9 +3,17 @@ import queue as _queue
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opensomeip.message import Message
+from opensomeip.types import MessageId, MessageType, RequestId, ReturnCode
 from pydantic import ValidationError
 
-from .common import SomeIpEventNotification, SomeIpMessageResponse, SomeIpPayload, SomeIpServiceEntry
+from .common import (
+    SomeIpEventNotification,
+    SomeIpMessageResponse,
+    SomeIpOfferedService,
+    SomeIpPayload,
+    SomeIpServiceEntry,
+)
 from .driver import SomeIp
 from jumpstarter.client.core import DriverError
 from jumpstarter.common.utils import serve
@@ -894,6 +902,368 @@ def test_stateful_discover_rpc_events_workflow(stateful_client, stateful_osip):
 
     assert len(stateful_osip._rpc_history) == 2
     assert stateful_osip._started is False
+
+
+# =========================================================================
+# Server / provider side tests
+#
+# The server verbs let the endpoint ACT AS an ECU (offer services, answer
+# RPC with canned responses, publish events). We patch the opensomeip
+# SomeIpServer so these run without real networking, and assert the driver
+# drives the underlying server API correctly.
+# =========================================================================
+
+
+class _FakeOsipServer:
+    """Minimal stand-in for opensomeip.SomeIpServer for server-side unit tests."""
+
+    def __init__(self, config=None):
+        self.config = config
+        self.started = False
+        self._offered: set = set()
+        self.handlers: dict = {}
+        self.registered_events: dict = {}
+        self.register_event_calls: list = []
+        self.published: list = []
+        self.fields: dict = {}
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.started = False
+
+    def offer(self, service):
+        self._offered.add((service.service_id, service.instance_id, service.major_version, service.minor_version))
+
+    def stop_offer(self, service):
+        self._offered.discard((service.service_id, service.instance_id, service.major_version, service.minor_version))
+
+    @property
+    def offered_services(self):
+        out = []
+        for sid, iid, maj, minr in self._offered:
+            out.append(
+                type(
+                    "Svc",
+                    (),
+                    {
+                        "service_id": sid,
+                        "instance_id": iid,
+                        "major_version": maj,
+                        "minor_version": minr,
+                    },
+                )()
+            )
+        return out
+
+    def register_method(self, message_id, handler):
+        self.handlers[(message_id.service_id, message_id.method_id)] = handler
+
+    def register_event(self, event_id, eventgroup_id):
+        self.register_event_calls.append((event_id, eventgroup_id))
+        self.registered_events[event_id] = eventgroup_id
+
+    def publish_event(self, event_id, payload):
+        self.published.append((event_id, payload))
+
+    def set_field(self, event_id, payload):
+        self.fields[event_id] = payload
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_offer_and_list(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.offer_service(0x1801, 0x0001, major_version=2)
+        offered = client.list_offered_services()
+        assert len(offered) == 1
+        assert isinstance(offered[0], SomeIpOfferedService)
+        assert offered[0].service_id == 0x1801
+        assert offered[0].instance_id == 0x0001
+        assert offered[0].major_version == 2
+        assert fake.started is True
+
+
+@pytest.mark.parametrize("reserved_instance_id", [0x0000, 0xFFFF])
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_offer_rejects_reserved_instance_ids(mock_server_cls, reserved_instance_id):
+    """Instance ID 0x0000 is reserved and 0xFFFF means 'all instances';
+    neither is a valid concrete instance to offer."""
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        with pytest.raises(DriverError, match="instance_id"):
+            client.offer_service(0x1801, reserved_instance_id)
+        # Rejected before the server is even created; nothing is offered
+        assert client.list_offered_services() == []
+        mock_server_cls.assert_not_called()
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_stop_offer(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.offer_service(0x1801, 0x0001)
+        assert len(client.list_offered_services()) == 1
+        client.stop_offer_service(0x1801, 0x0001)
+        assert client.list_offered_services() == []
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_set_method_response_registers_handler(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.set_method_response(0x1801, 0x0005, b"\xde\xad\xbe\xef")
+        # Handler registered exactly once for the method
+        assert (0x1801, 0x0005) in fake.handlers
+
+        # Invoke the registered handler as the RpcServer would, and check the reply
+
+        req = Message(message_id=MessageId(0x1801, 0x0005), request_id=RequestId(0x0001, 0x0007))
+        resp = fake.handlers[(0x1801, 0x0005)](req)
+        assert resp.payload == b"\xde\xad\xbe\xef"
+        assert resp.return_code == ReturnCode.E_OK
+        assert resp.message_type == MessageType.RESPONSE
+        # Response echoes the request's request_id (client/session correlation)
+        assert resp.request_id.session_id == 0x0007
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_method_response_updates_without_reregister(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.set_method_response(0x1801, 0x0005, b"\x01")
+        handler = fake.handlers[(0x1801, 0x0005)]
+        client.set_method_response(0x1801, 0x0005, b"\x02")
+        # Same handler object reused (registered once); response value updated live
+        assert fake.handlers[(0x1801, 0x0005)] is handler
+
+        req = Message(message_id=MessageId(0x1801, 0x0005), request_id=RequestId(1, 1))
+        assert handler(req).payload == b"\x02"
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_method_response_error_code(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.set_method_response(0x1801, 0x0006, b"", return_code=0x01)
+
+        req = Message(message_id=MessageId(0x1801, 0x0006), request_id=RequestId(1, 1))
+        resp = fake.handlers[(0x1801, 0x0006)](req)
+        assert resp.return_code == ReturnCode.E_NOT_OK
+        assert resp.message_type == MessageType.ERROR
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_clear_method_response_falls_back_to_empty_ok(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.set_method_response(0x1801, 0x0005, b"\xaa")
+        handler = fake.handlers[(0x1801, 0x0005)]
+        client.clear_method_response(0x1801, 0x0005)
+
+        req = Message(message_id=MessageId(0x1801, 0x0005), request_id=RequestId(1, 1))
+        resp = handler(req)
+        assert resp.payload == b""
+        assert resp.return_code == ReturnCode.E_OK
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_register_and_publish_event(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.register_event(0x1801, 0x8001, eventgroup_id=1)
+        assert fake.registered_events[0x8001] == 1
+
+        client.publish_event(0x1801, 0x8001, b"\x2d\x00")  # e.g. signal level payload
+        assert fake.published == [(0x8001, b"\x2d\x00")]
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_register_event_idempotent(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.register_event(0x1801, 0x8001, eventgroup_id=1)
+        client.register_event(0x1801, 0x8001, eventgroup_id=1)
+        # not re-registered with the underlying server for the same (event, group)
+        assert fake.register_event_calls == [(0x8001, 1)]
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_set_field(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.set_field(0x1801, 0x8002, b"\x01")
+        assert fake.fields[0x8002] == b"\x01"
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_stop_server_clears_state(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        client.set_method_response(0x1801, 0x0005, b"\xaa")
+        client.register_event(0x1801, 0x8001, eventgroup_id=1)
+        client.stop_server()
+        assert fake.started is False
+
+        # After stop, a new offer builds a fresh server and re-registers cleanly
+        fake2 = _FakeOsipServer()
+        mock_server_cls.return_value = fake2
+        client.offer_service(0x1802, 0x0001)
+        assert fake2.started is True
+        assert len(client.list_offered_services()) == 1
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_list_offered_when_not_started(mock_server_cls):
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    with serve(driver) as client:
+        # No offer yet -> server never created -> empty list, no crash
+        assert client.list_offered_services() == []
+        mock_server_cls.assert_not_called()
+
+
+@patch("jumpstarter_driver_someip.driver.OsipServer")
+def test_server_lazy_start(mock_server_cls):
+    """Server is not created at construction; created on first server verb."""
+    fake = _FakeOsipServer()
+    mock_server_cls.return_value = fake
+
+    driver = SomeIp(host="127.0.0.1", port=30490)
+    mock_server_cls.assert_not_called()
+    with serve(driver) as client:
+        mock_server_cls.assert_not_called()
+        client.start_server()
+        mock_server_cls.assert_called_once()
+        assert fake.started is True
+
+
+# =========================================================================
+# Stateful loopback server tests
+#
+# These use the StatefulOsipServer / LoopbackOsipClient pair (conftest.py):
+# RPC calls made through the driver's client verbs are dispatched to the
+# handlers the driver registered through its server verbs, so each test
+# exercises the full simulated-ECU workflow (offer + canned response +
+# client RPC) through the gRPC boundary.
+# =========================================================================
+
+
+def _loopback_client_ctx(loopback_pair):
+    """Context manager: serve() a SomeIp driver backed by the loopback pair."""
+    server, osip_client = loopback_pair
+    with (
+        patch("jumpstarter_driver_someip.driver.OsipServer", return_value=server),
+        patch("jumpstarter_driver_someip.driver.OsipClient", return_value=osip_client),
+    ):
+        instance = SomeIp(host="127.0.0.1", port=30490)
+        with serve(instance) as c:
+            yield c
+
+
+@pytest.fixture
+def loopback_client(loopback_pair):
+    yield from _loopback_client_ctx(loopback_pair)
+
+
+def test_loopback_offer_discover_rpc(loopback_client):
+    """Simulated-ECU loop: offer a service, configure a canned response, and
+    call it back through the client RPC verbs."""
+    loopback_client.offer_service(0x1801, 0x0001, major_version=2)
+
+    services = loopback_client.find_service(0x1801, timeout=0.1)
+    assert len(services) == 1
+    assert services[0].instance_id == 0x0001
+    assert services[0].major_version == 2
+
+    loopback_client.set_method_response(0x1801, 0x0005, b"\xde\xad\xbe\xef")
+    resp = loopback_client.rpc_call(0x1801, 0x0005, b"\x00")
+    assert resp.service_id == 0x1801
+    assert resp.method_id == 0x0005
+    assert resp.payload == "deadbeef"
+    assert resp.return_code == 0x00
+
+
+def test_loopback_method_response_update_takes_effect(loopback_client):
+    """Updating a canned response changes what subsequent RPC calls read."""
+    loopback_client.offer_service(0x1801)
+    loopback_client.set_method_response(0x1801, 0x0005, b"\x01")
+    assert loopback_client.rpc_call(0x1801, 0x0005, b"").payload == "01"
+
+    loopback_client.set_method_response(0x1801, 0x0005, b"\x02")
+    assert loopback_client.rpc_call(0x1801, 0x0005, b"").payload == "02"
+
+
+def test_loopback_method_error_return_code(loopback_client):
+    """A canned error return code is surfaced to the RPC caller."""
+    loopback_client.offer_service(0x1801)
+    loopback_client.set_method_response(0x1801, 0x0006, b"", return_code=0x01)
+
+    resp = loopback_client.rpc_call(0x1801, 0x0006, b"")
+    assert resp.return_code == 0x01
+
+
+def test_loopback_publish_event_roundtrip(loopback_client):
+    """Events published by the server side reach a subscribed client."""
+    loopback_client.register_event(0x1801, 0x8001, eventgroup_id=1)
+    loopback_client.subscribe_eventgroup(1)
+
+    loopback_client.publish_event(0x1801, 0x8001, b"\xca\xfe")
+    event = loopback_client.receive_event(timeout=1.0)
+    assert event.event_id == 0x8001
+    assert event.payload == "cafe"
+
+
+def test_loopback_stop_server_clears_canned_responses(loopback_client):
+    """Canned responses must not survive stop_server + restart."""
+    loopback_client.offer_service(0x1801)
+    loopback_client.set_method_response(0x1801, 0x0005, b"\xaa")
+    assert loopback_client.rpc_call(0x1801, 0x0005, b"").payload == "aa"
+
+    loopback_client.stop_server()
+
+    # After a restart the stale payload is gone; the handler serves the
+    # empty E_OK default until reconfigured.
+    loopback_client.offer_service(0x1801)
+    resp = loopback_client.rpc_call(0x1801, 0x0005, b"")
+    assert resp.payload == ""
+    assert resp.return_code == 0x00
 
 
 # =========================================================================

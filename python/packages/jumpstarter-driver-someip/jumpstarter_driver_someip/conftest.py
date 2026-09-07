@@ -18,6 +18,9 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opensomeip.message import Message as OsipMessage
+from opensomeip.types import MessageId as OsipMessageId
+from opensomeip.types import RequestId as OsipRequestId
 
 # =========================================================================
 # Wire-protocol constants
@@ -386,6 +389,122 @@ class StatefulOsipClient:
             for s in self._registered_services
             if not (s.service_id == service_id and s.instance_id == instance_id)
         ]
+
+
+# =========================================================================
+# StatefulOsipServer / LoopbackOsipClient - simulated-ECU loopback pair
+#
+# The server fake tracks offers, RPC handlers, and events like a real
+# opensomeip.SomeIpServer.  The loopback client dispatches RPC calls to the
+# server's registered handlers and discovers the server's offers, so tests
+# can exercise the full simulated-ECU workflow (offer + canned response +
+# client RPC) through the gRPC boundary with a single driver.
+# =========================================================================
+
+
+class StatefulOsipServer:
+    """A drop-in replacement for ``opensomeip.SomeIpServer`` that tracks
+    offers, RPC handlers, and events, and loops published events back to an
+    attached ``LoopbackOsipClient``.
+    """
+
+    def __init__(self, config=None) -> None:
+        self._started = False
+        self._config = config
+        self._offered: list = []
+        self.handlers: dict = {}
+        self.registered_events: dict = {}
+        self.fields: dict = {}
+        self._client: LoopbackOsipClient | None = None
+
+    def attach_client(self, client: LoopbackOsipClient) -> None:
+        self._client = client
+
+    def start(self):
+        self._started = True
+
+    def stop(self):
+        self._started = False
+        self._offered.clear()
+
+    def offer(self, service):
+        self._offered.append(service)
+
+    def stop_offer(self, service):
+        self._offered = [
+            s
+            for s in self._offered
+            if not (s.service_id == service.service_id and s.instance_id == service.instance_id)
+        ]
+
+    @property
+    def offered_services(self):
+        return list(self._offered)
+
+    def register_method(self, message_id, handler):
+        self.handlers[(message_id.service_id, message_id.method_id)] = handler
+
+    def register_event(self, event_id, eventgroup_id):
+        self.registered_events[event_id] = eventgroup_id
+
+    def publish_event(self, event_id, payload):
+        """Deliver the event to the attached client if it is subscribed."""
+        eventgroup_id = self.registered_events.get(event_id)
+        client = self._client
+        if client is not None and eventgroup_id in client._subscribed_eventgroups:
+            client.inject_event(0x0000, event_id, payload)
+
+    def set_field(self, event_id, payload):
+        self.fields[event_id] = payload
+        self.publish_event(event_id, payload)
+
+
+class LoopbackOsipClient(StatefulOsipClient):
+    """A ``StatefulOsipClient`` wired to a ``StatefulOsipServer``.
+
+    RPC calls dispatch to the server's registered method handlers (built as
+    real ``opensomeip`` request messages) and service discovery reflects the
+    server's current offers.
+    """
+
+    def __init__(self, server: StatefulOsipServer, config=None) -> None:
+        super().__init__(config)
+        self._server = server
+        # Discovery and RPC reflect the server side, not a static registry.
+        self._registered_services = []
+        self._rpc_responses = {}
+
+    def call(self, message_id, *, payload: bytes = b"", timeout: float = 5.0):
+        self._require_started()
+        sid = message_id.service_id
+        mid = message_id.method_id
+        self._rpc_history.append((sid, mid, payload))
+        handler = self._server.handlers.get((sid, mid))
+        if handler is None:
+            raise TimeoutError(f"no handler registered for service 0x{sid:04X} method 0x{mid:04X}")
+        request = OsipMessage(
+            message_id=OsipMessageId(sid, mid),
+            request_id=OsipRequestId(0x0001, len(self._rpc_history)),
+            payload=payload,
+        )
+        return handler(request)
+
+    def find(self, service, *, callback=None):
+        self._require_started()
+        for svc in self._server.offered_services:
+            if svc.service_id == service.service_id:
+                if service.instance_id == 0xFFFF or svc.instance_id == service.instance_id:
+                    if callback:
+                        callback(svc)
+
+
+@pytest.fixture
+def loopback_pair():
+    """Provide a wired (StatefulOsipServer, LoopbackOsipClient) pair."""
+    server = StatefulOsipServer()
+    client = LoopbackOsipClient(server)
+    server.attach_client(client)
+    return server, client
 
 
 @pytest.fixture(autouse=True)

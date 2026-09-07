@@ -63,3 +63,12 @@ class SomeIpEventNotification(BaseModel):
     @classmethod
     def _validate_hex(cls, v: str) -> str:
         return _validate_hex_string(v)
+
+
+class SomeIpOfferedService(BaseModel):
+    """A service instance the server is currently offering (server-side introspection)."""
+
+    service_id: int = Field(ge=0, le=0xFFFF)
+    instance_id: int = Field(ge=0, le=0xFFFF)
+    major_version: int = Field(default=1, ge=0, le=0xFF)
+    minor_version: int = Field(default=0, ge=0, le=0xFFFFFFFF)

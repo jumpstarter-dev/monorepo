@@ -5,12 +5,13 @@ import queue
 import threading
 from dataclasses import field
 
-from opensomeip import ClientConfig, TransportMode
+from opensomeip import ClientConfig, ServerConfig, TransportMode
 from opensomeip import SomeIpClient as OsipClient
+from opensomeip import SomeIpServer as OsipServer
 from opensomeip.message import Message
 from opensomeip.sd import SdConfig, ServiceInstance
 from opensomeip.transport import Endpoint
-from opensomeip.types import MessageId
+from opensomeip.types import MessageId, MessageType, ReturnCode
 
 try:
     from opensomeip._bridge import get_ext
@@ -22,6 +23,7 @@ from pydantic.dataclasses import dataclass
 from .common import (
     SomeIpEventNotification,
     SomeIpMessageResponse,
+    SomeIpOfferedService,
     SomeIpPayload,
     SomeIpServiceEntry,
 )
@@ -30,6 +32,10 @@ from jumpstarter.driver import Driver, export
 logger = logging.getLogger(__name__)
 
 _VALID_TRANSPORT_MODES = {"TCP", "UDP"}
+
+# SOME/IP reserves Instance ID 0x0000; 0xFFFF means "all instances" and is
+# only valid in find/subscribe contexts, never as a concrete offered instance.
+_RESERVED_INSTANCE_IDS = {0x0000, 0xFFFF}
 
 
 def _message_to_response(msg: Message) -> SomeIpMessageResponse:
@@ -84,6 +90,16 @@ class SomeIp(Driver):
     _osip_client: OsipClient | None = field(init=False, repr=False, default=None)
     _osip_config: ClientConfig = field(init=False, repr=False)
     _osip_lock: SkipValidation[threading.Lock] = field(init=False, repr=False, default_factory=threading.Lock)
+
+    # Server / provider side (offer services, answer RPC, publish events).
+    _osip_server: OsipServer | None = field(init=False, repr=False, default=None)
+    _server_lock: SkipValidation[threading.Lock] = field(init=False, repr=False, default_factory=threading.Lock)
+    # Canned RPC responses keyed by (service_id, method_id) -> (payload bytes, return_code).
+    _method_responses: SkipValidation[dict] = field(init=False, repr=False, default_factory=dict)
+    # Methods already registered with the underlying RpcServer (register_method is one-shot).
+    _registered_methods: SkipValidation[set] = field(init=False, repr=False, default_factory=set)
+    # Events registered for publishing: (service_id, event_id) -> eventgroup_id.
+    _registered_events: SkipValidation[dict] = field(init=False, repr=False, default_factory=dict)
 
     @classmethod
     def client(cls) -> str:
@@ -149,12 +165,17 @@ class SomeIp(Driver):
         return self._osip_client
 
     def close(self):
-        """Stop the opensomeip client."""
+        """Stop the opensomeip client and server."""
         if self._osip_client is not None:
             try:
                 self._osip_client.stop()
             except Exception:
                 logger.warning("failed to close opensomeip client", exc_info=True)
+        if self._osip_server is not None:
+            try:
+                self._osip_server.stop()
+            except Exception:
+                logger.warning("failed to close opensomeip server", exc_info=True)
         super().close()
 
     # --- RPC ---
@@ -291,3 +312,214 @@ class SomeIp(Driver):
             self._osip_client.start()
         else:
             self._ensure_client()
+
+    # =====================================================================
+    # Server / provider side
+    #
+    # Lets this endpoint ACT AS an ECU: offer services via SD, answer RPC
+    # requests with canned responses, and publish events / fields. This is
+    # the foundation for building external ECU simulators.
+    #
+    # RPC handlers run in the opensomeip receive thread inside the exporter
+    # process, so they cannot call back to the Jumpstarter client per
+    # request. Instead the client configures a canned response per method
+    # (set_method_response) and the in-process handler serves it. Getter-
+    # style SOME/IP methods (identity + status fields exposed by an ECU) map
+    # cleanly onto this model; update the response to change what a client
+    # of the simulated ECU reads.
+    # =====================================================================
+
+    def _build_server_config(self) -> ServerConfig:
+        transport_upper = self.transport_mode.upper()
+        mode = TransportMode.TCP if transport_upper == "TCP" else TransportMode.UDP
+        return ServerConfig(
+            local_endpoint=Endpoint(self.host, self.port),
+            sd_config=SdConfig(
+                multicast_endpoint=Endpoint(self.multicast_group, self.multicast_port),
+                unicast_endpoint=Endpoint(self.host, self.port),
+            ),
+            transport_mode=mode,
+            multicast_group=self.multicast_group if mode == TransportMode.UDP else None,
+        )
+
+    def _ensure_server(self) -> OsipServer:
+        """Create and start the OsipServer on first use (thread-safe)."""
+        if self._osip_server is None:
+            with self._server_lock:
+                if self._osip_server is None:
+                    server = OsipServer(self._build_server_config())
+                    server.start()
+                    self._osip_server = server
+        return self._osip_server
+
+    def _make_method_handler(self, service_id: int, method_id: int):
+        """Build an RPC handler that replies with the currently-configured
+        canned response for (service_id, method_id).
+
+        The handler is registered once per method; it reads _method_responses
+        live on each call so set_method_response updates take effect without
+        re-registration.
+        """
+        key = (service_id, method_id)
+
+        def handler(request: Message) -> Message:
+            payload, return_code = self._method_responses.get(key, (b"", int(ReturnCode.E_OK)))
+            rc = ReturnCode(return_code) if return_code in ReturnCode._value2member_map_ else ReturnCode.E_NOT_OK
+            return Message(
+                message_id=MessageId(service_id, method_id),
+                request_id=request.request_id,
+                message_type=MessageType.RESPONSE if rc == ReturnCode.E_OK else MessageType.ERROR,
+                return_code=rc,
+                interface_version=request.interface_version,
+                payload=payload,
+            )
+
+        return handler
+
+    @export
+    @validate_call(validate_return=True)
+    def start_server(self) -> None:
+        """Force-start the SOME/IP server (otherwise started on first offer)."""
+        self._ensure_server()
+
+    @export
+    @validate_call(validate_return=True)
+    def offer_service(
+        self,
+        service_id: int,
+        instance_id: int = 0x0001,
+        major_version: int = 1,
+        minor_version: int = 0,
+    ) -> None:
+        """Offer a service instance for discovery (acts as the providing ECU)."""
+        if instance_id in _RESERVED_INSTANCE_IDS:
+            raise ValueError(
+                f"Invalid instance_id 0x{instance_id:04X}: 0x0000 is reserved and "
+                "0xFFFF means 'all instances'; neither can be offered."
+            )
+        service = ServiceInstance(
+            service_id=service_id,
+            instance_id=instance_id,
+            major_version=major_version,
+            minor_version=minor_version,
+        )
+        self._ensure_server().offer(service)
+
+    @export
+    @validate_call(validate_return=True)
+    def stop_offer_service(
+        self,
+        service_id: int,
+        instance_id: int = 0x0001,
+        major_version: int = 1,
+        minor_version: int = 0,
+    ) -> None:
+        """Withdraw a previously offered service instance."""
+        if self._osip_server is None:
+            return
+        service = ServiceInstance(
+            service_id=service_id,
+            instance_id=instance_id,
+            major_version=major_version,
+            minor_version=minor_version,
+        )
+        self._osip_server.stop_offer(service)
+
+    @export
+    @validate_call(validate_return=True)
+    def list_offered_services(self) -> list[SomeIpOfferedService]:
+        """Return the set of services this server currently offers."""
+        if self._osip_server is None:
+            return []
+        result: list[SomeIpOfferedService] = []
+        for svc in self._osip_server.offered_services:
+            result.append(
+                SomeIpOfferedService(
+                    service_id=svc.service_id,
+                    instance_id=svc.instance_id,
+                    major_version=svc.major_version,
+                    minor_version=svc.minor_version,
+                )
+            )
+        return result
+
+    @export
+    @validate_call(validate_return=True)
+    def set_method_response(
+        self,
+        service_id: int,
+        method_id: int,
+        payload: SomeIpPayload,
+        return_code: int = 0,
+    ) -> None:
+        """Configure the canned response the server returns for an RPC method.
+
+        Registers a handler for (service_id, method_id) on first call and
+        stores the response; subsequent calls just update the stored value.
+        """
+        key = (service_id, method_id)
+        self._method_responses[key] = (bytes.fromhex(payload.data), return_code)
+        server = self._ensure_server()
+        if key not in self._registered_methods:
+            server.register_method(MessageId(service_id, method_id), self._make_method_handler(service_id, method_id))
+            self._registered_methods.add(key)
+
+    @export
+    @validate_call(validate_return=True)
+    def clear_method_response(self, service_id: int, method_id: int) -> None:
+        """Remove a configured RPC response.
+
+        The handler stays registered (opensomeip has no unregister); it falls
+        back to an empty E_OK reply until reconfigured.
+        """
+        self._method_responses.pop((service_id, method_id), None)
+
+    @export
+    @validate_call(validate_return=True)
+    def register_event(self, service_id: int, event_id: int, eventgroup_id: int) -> None:
+        """Register an event for publishing under an event group."""
+        server = self._ensure_server()
+        key = (service_id, event_id)
+        if self._registered_events.get(key) != eventgroup_id:
+            server.register_event(event_id, eventgroup_id)
+            self._registered_events[key] = eventgroup_id
+
+    @export
+    @validate_call(validate_return=True)
+    def publish_event(self, service_id: int, event_id: int, payload: SomeIpPayload) -> None:
+        """Publish an event notification to subscribers of its event group.
+
+        ``service_id`` is accepted for API symmetry with the other server
+        verbs but is currently unused: opensomeip addresses events by
+        ``event_id`` only (one server endpoint per driver instance).
+        """
+        self._ensure_server().publish_event(event_id, bytes.fromhex(payload.data))
+
+    @export
+    @validate_call(validate_return=True)
+    def set_field(self, service_id: int, event_id: int, payload: SomeIpPayload) -> None:
+        """Set a field event value (served to new subscribers and notified).
+
+        ``service_id`` is accepted for API symmetry with the other server
+        verbs but is currently unused: opensomeip addresses fields by
+        ``event_id`` only (one server endpoint per driver instance).
+        """
+        self._ensure_server().set_field(event_id, bytes.fromhex(payload.data))
+
+    @export
+    @validate_call(validate_return=True)
+    def stop_server(self) -> None:
+        """Stop the SOME/IP server, withdrawing all offers.
+
+        All server state is discarded: canned method responses, registered
+        methods, and registered events must be reconfigured after a restart.
+        """
+        if self._osip_server is not None:
+            try:
+                self._osip_server.stop()
+            except Exception:
+                logger.warning("failed to stop opensomeip server", exc_info=True)
+            self._osip_server = None
+            self._method_responses.clear()
+            self._registered_methods.clear()
+            self._registered_events.clear()

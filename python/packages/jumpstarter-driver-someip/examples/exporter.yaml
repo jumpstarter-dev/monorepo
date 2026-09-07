@@ -32,3 +32,24 @@ export:
       transport_mode: UDP
       remote_host: "192.168.100.10"
       remote_port: 30490
+---
+# Provider / server mode - offer services, answer RPC, and publish events
+# (act as a simulated ECU that a device-under-test's SOME/IP client talks to).
+# Bind to the interface the DUT shares; services are offered at runtime via the
+# offer_service / set_method_response / publish_event client verbs.
+apiVersion: jumpstarter.dev/v1alpha1
+kind: ExporterConfig
+metadata:
+  namespace: default
+  name: someip-server-exporter
+endpoint: ""
+token: ""
+export:
+  someip:
+    type: jumpstarter_driver_someip.driver.SomeIp
+    config:
+      host: "192.168.100.1"
+      port: 30490
+      transport_mode: UDP
+      multicast_group: "239.127.0.1"
+      multicast_port: 30490
