@@ -497,10 +497,8 @@ class Qemu(Driver):
         """Directory for flashable guest disk images (root, bios, …)."""
         if self.launcher_socket:
             work = Path(self._work_dir)
-            # Production sidecar: sockets on /shared, guest disk on /disk.
-            # Must match controller/internal/exporterset/provisioners/qemu/qemu.go
-            # sharedMountPath ("/shared") and controller/internal/exporterset/disk/disk.go
-            # MountPath ("/disk"). Tests use a tmp shared dir — keep disks next to sockets.
+            # Production sidecar: shared volume for sockets, separate mount for guest disk.
+            # Keep in sync with Go constants in exporterset/provisioners/qemu and disk packages.
             if work == Path("/shared"):
                 return "/disk"
             return str(work)
