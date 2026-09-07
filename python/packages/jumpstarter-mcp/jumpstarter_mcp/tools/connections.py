@@ -8,8 +8,8 @@ from datetime import timedelta
 import anyio.to_thread  # noqa: F401
 
 from jumpstarter_mcp.connections import ConnectionManager
-from jumpstarter_mcp.introspect import list_drivers, walk_click_tree
 
+from jumpstarter.client.introspect import list_drivers, walk_click_tree
 from jumpstarter.config.client import ClientConfigV1Alpha1
 
 logger = logging.getLogger(__name__)

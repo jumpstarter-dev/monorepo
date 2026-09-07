@@ -10,6 +10,8 @@ from jumpstarter_cli_common.print import model_print
 from pydantic import BaseModel, ConfigDict, Field
 
 from .login import relogin_client
+from jumpstarter.client.grpc import Lease
+from jumpstarter.client.introspect import describe_drivers
 from jumpstarter.config.client import ClientConfigV1Alpha1
 from jumpstarter.config.user import UserConfigV1Alpha1
 
@@ -57,25 +59,20 @@ def _condition_time(condition) -> datetime | None:
 
 
 def _print_conditions(conditions) -> None:
-    if not conditions:
-        click.echo("Conditions:  <none>")
-        return
-    click.echo("Conditions:")
-    headers = ["Type", "Status", "Reason", "Message", "Last Transition Time"]
-    rows = [
+    _print_table(
+        "Conditions",
+        ["Type", "Status", "Reason", "Message", "Last Transition Time"],
         [
-            _format_value(condition.type),
-            _format_value(condition.status),
-            _format_value(condition.reason),
-            _format_value(condition.message),
-            _format_value(_condition_time(condition)),
-        ]
-        for condition in conditions
-    ]
-    widths = [max([len(header)] + [len(row[i]) for row in rows]) for i, header in enumerate(headers)]
-    dashes = ["-" * len(header) for header in headers]
-    for cells in [headers, dashes, *rows]:
-        click.echo("  " + "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True)).rstrip())
+            [
+                _format_value(condition.type),
+                _format_value(condition.status),
+                _format_value(condition.reason),
+                _format_value(condition.message),
+                _format_value(_condition_time(condition)),
+            ]
+            for condition in conditions
+        ],
+    )
 
 
 @click.group(cls=AliasedGroup)
@@ -149,20 +146,76 @@ def describe_exporter(config, name: str, output: OutputType):
         click.echo("Lease:  <none>")
 
 
+class LeaseDescription(BaseModel):
+    lease: Lease
+    driver_tree: dict
+
+
+def _walk_commands(tree: dict, path: list[str]) -> list[tuple[str, str]]:
+    commands = []
+    for name, subtree in sorted((tree.get("subcommands") or {}).items()):
+        subpath = [*path, name]
+        if subtree.get("subcommands"):
+            commands.extend(_walk_commands(subtree, subpath))
+        else:
+            help_text = (subtree.get("help") or "").strip().splitlines()
+            commands.append((" ".join(subpath), help_text[0] if help_text else ""))
+    return commands
+
+
+def _print_table(label: str, headers: list[str], rows: list[list[str]]) -> None:
+    if not rows:
+        click.echo(f"{label}:  <none>")
+        return
+    click.echo(f"{label}:")
+    widths = [max([len(header)] + [len(row[i]) for row in rows]) for i, header in enumerate(headers)]
+    dashes = ["-" * len(header) for header in headers]
+    for cells in [headers, dashes, *rows]:
+        click.echo("  " + "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True)).rstrip())
+
+
+def _print_drivers(driver_tree: dict) -> None:
+    _print_table(
+        "Drivers",
+        ["Path", "Class", "Methods"],
+        [
+            [
+                ".".join(driver["driver_path"]) or "(root)",
+                driver["class"],
+                ", ".join(driver["methods"]),
+            ]
+            for driver in driver_tree["drivers"]
+        ],
+    )
+    commands = _walk_commands(driver_tree["cli_tree"], ["j"]) if driver_tree.get("cli_tree") else []
+    _print_table("Commands", ["Command", "Description"], [[command, help] for command, help in commands])
+
+
 @describe.command(name="lease")
 @opt_config(exporter=False)
 @click.argument("name")
+@click.option(
+    "--drivers",
+    "show_drivers",
+    is_flag=True,
+    default=False,
+    help="Connect to the leased exporter and include its driver tree and driver commands.",
+)
 @opt_output
 @handle_exceptions_with_reauthentication(relogin_client)
-def describe_lease(config, name: str, output: OutputType):
+def describe_lease(config, name: str, show_drivers: bool, output: OutputType):
     """
     Show details of a specific lease
     """
 
     lease = config.get_lease(name=name)
+    driver_tree = describe_drivers(config, name) if show_drivers else None
 
     if output:
-        model_print(lease, output)
+        if driver_tree is not None:
+            model_print(LeaseDescription(lease=lease, driver_tree=driver_tree), output)
+        else:
+            model_print(lease, output)
         return
 
     _print_fields(
@@ -181,6 +234,8 @@ def describe_lease(config, name: str, output: OutputType):
     _print_mapping("Tags", lease.tags)
     _print_mapping("Context", lease.context)
     _print_conditions(lease.conditions)
+    if driver_tree is not None:
+        _print_drivers(driver_tree)
 
 
 class ClientDescription(BaseModel):

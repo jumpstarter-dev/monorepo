@@ -12,7 +12,8 @@ import anyio.to_thread
 import click
 
 from jumpstarter_mcp.connections import ConnectionManager
-from jumpstarter_mcp.introspect import get_driver_methods, list_drivers, walk_click_tree
+
+from jumpstarter.client.introspect import get_driver_methods, list_drivers, walk_click_tree
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,10 @@ async def drivers(
 ) -> list[dict]:
     """List all drivers in the client tree."""
     conn = manager.get_connection(connection_id)
-    return list_drivers(conn.client)
+    # Off the loop thread, as explore() does. These walk a sync client facade
+    # over a blocking portal; they read attributes statically today and so do
+    # not dispatch, but a driver property that ever did would deadlock the loop.
+    return await anyio.to_thread.run_sync(list_drivers, conn.client)
 
 
 async def driver_methods(
@@ -129,4 +133,4 @@ async def driver_methods(
 ) -> dict:
     """Inspect methods on a specific driver."""
     conn = manager.get_connection(connection_id)
-    return get_driver_methods(conn.client, driver_path)
+    return await anyio.to_thread.run_sync(get_driver_methods, conn.client, driver_path)

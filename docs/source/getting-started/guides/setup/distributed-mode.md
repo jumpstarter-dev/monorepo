@@ -136,6 +136,27 @@ Conditions:
   Ready  True    Ready   An exporter has been acquired for the client  2026-08-31 14:04:36 UTC
 ```
 
+For a lease you hold, add `--drivers` to connect to its exporter and discover
+its drivers and runnable `j` commands:
+
+```console
+$ jmp describe lease 01a05822-e378-71cc-a98c-a216ad4a9432 --client hello --drivers
+$ jmp describe lease 01a05822-e378-71cc-a98c-a216ad4a9432 --client hello --drivers -o json
+```
+
+The human-readable description adds **Drivers** and **Commands** tables. With
+`-o json` or `-o yaml`, the result is `{lease, driver_tree}`: `lease` contains the
+usual lease metadata, while `driver_tree` contains a `drivers` list and the recursive
+`cli_tree`, including command help and parameters. This is discovery only; it
+does not execute the listed driver commands, create a lease, or release your
+existing lease when it finishes. It does require a connection to the exporter
+and uses the selected client's driver-access settings. Without `--drivers`,
+the existing metadata-only behavior and output shape are unchanged.
+
+Here, **drivers** means the software driver clients exposed by the lease session,
+not an inventory of physical devices attached to the exporter. The exporter's
+existing device report is unchanged by this command.
+
 Describing a client reads the local configuration rather than the cluster, so it
 works without a connection and reports whether the client's token is still valid:
 
