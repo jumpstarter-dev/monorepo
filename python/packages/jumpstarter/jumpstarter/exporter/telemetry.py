@@ -63,11 +63,13 @@ class TelemetryLogHandler(logging.Handler):
         stub: telemetry_pb2_grpc.TelemetryServiceStub,
         namespace: str = "",
         token: str = "",
+        component: str = "exporter",
     ) -> None:
         super().__init__()
         self._stub = stub
         self._namespace = namespace
         self._token = token
+        self.component = component
         self._queue: deque[telemetry_pb2.LogEntry] = deque(maxlen=_MAX_QUEUE_SIZE)
 
     def prepare(self, record: logging.LogRecord) -> telemetry_pb2.LogEntry:
@@ -84,7 +86,7 @@ class TelemetryLogHandler(logging.Handler):
             timestamp=ts,
             severity=_severity(record.levelname),
             message=record.getMessage(),
-            component="exporter",
+            component=self.component,
             namespace=self._namespace,
         )
 

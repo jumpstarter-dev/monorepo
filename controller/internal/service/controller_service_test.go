@@ -2083,6 +2083,18 @@ func (e *exporterAttributesGetter) ContextAttributes(_ context.Context, u user.I
 	}, nil
 }
 
+// clientAttributesGetter returns attributes that identify a fixed Client object.
+type clientAttributesGetter struct{ namespace, name string }
+
+func (c *clientAttributesGetter) ContextAttributes(_ context.Context, u user.Info) (authorizer.Attributes, error) {
+	return authorizer.AttributesRecord{
+		User:      u,
+		Namespace: c.namespace,
+		Resource:  "Client",
+		Name:      c.name,
+	}, nil
+}
+
 // passingAuthorizer always allows.
 type passingAuthorizer struct{}
 
@@ -2110,6 +2122,29 @@ func authSuccessServiceCtx(t *testing.T, cfg *config.Telemetry) (*ControllerServ
 		Authn:           &passingAuthenticator{userName: "test-user"},
 		Authz:           passingAuthorizer{},
 		Attr:            &exporterAttributesGetter{namespace: "default", name: "test-exporter"},
+		TelemetryConfig: cfg,
+	}
+	return svc, context.Background()
+}
+
+// authSuccessClientServiceCtx is like authSuccessServiceCtx but authenticates as a Client.
+func authSuccessClientServiceCtx(t *testing.T, cfg *config.Telemetry) (*ControllerService, context.Context) {
+	t.Helper()
+
+	scheme := k8sruntime.NewScheme()
+	if err := jumpstarterdevv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add scheme: %v", err)
+	}
+	jclient := &jumpstarterdevv1alpha1.Client{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-client", Namespace: "default"},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(jclient).Build()
+
+	svc := &ControllerService{
+		Client:          fakeClient,
+		Authn:           &passingAuthenticator{userName: "test-user"},
+		Authz:           passingAuthorizer{},
+		Attr:            &clientAttributesGetter{namespace: "default", name: "test-client"},
 		TelemetryConfig: cfg,
 	}
 	return svc, context.Background()

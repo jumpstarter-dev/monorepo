@@ -25,6 +25,22 @@ class _ServicerContext(grpc.ServicerContext, grpc.aio.ServicerContext):  # type:
 
 GRPC_GENERATED_VERSION: str
 GRPC_VERSION: str
+_TelemetryServiceMetricsStreamType = typing_extensions.TypeVar(
+    '_TelemetryServiceMetricsStreamType',
+    grpc.StreamStreamMultiCallable[
+        jumpstarter.v1.telemetry_pb2.MetricsStreamRequest,
+        jumpstarter.v1.telemetry_pb2.MetricsStreamResponse,
+    ],
+    grpc.aio.StreamStreamMultiCallable[
+        jumpstarter.v1.telemetry_pb2.MetricsStreamRequest,
+        jumpstarter.v1.telemetry_pb2.MetricsStreamResponse,
+    ],
+    default=grpc.StreamStreamMultiCallable[
+        jumpstarter.v1.telemetry_pb2.MetricsStreamRequest,
+        jumpstarter.v1.telemetry_pb2.MetricsStreamResponse,
+    ],
+)
+
 _TelemetryServicePushLogsType = typing_extensions.TypeVar(
     '_TelemetryServicePushLogsType',
     grpc.UnaryUnaryMultiCallable[
@@ -41,13 +57,17 @@ _TelemetryServicePushLogsType = typing_extensions.TypeVar(
     ],
 )
 
-class TelemetryServiceStub(typing.Generic[_TelemetryServicePushLogsType]):
-    """A service that receives structured logs from exporters and clients.
+class TelemetryServiceStub(typing.Generic[_TelemetryServiceMetricsStreamType, _TelemetryServicePushLogsType]):
+    """A service that reverse-scrapes exporter metrics and receives structured logs.
     Implemented by jumpstarter-telemetry; not part of the controller.
     """
 
     @typing.overload
     def __init__(self: TelemetryServiceStub[
+        grpc.StreamStreamMultiCallable[
+            jumpstarter.v1.telemetry_pb2.MetricsStreamRequest,
+            jumpstarter.v1.telemetry_pb2.MetricsStreamResponse,
+        ],
         grpc.UnaryUnaryMultiCallable[
             jumpstarter.v1.telemetry_pb2.PushLogsRequest,
             jumpstarter.v1.telemetry_pb2.PushLogsResponse,
@@ -56,16 +76,29 @@ class TelemetryServiceStub(typing.Generic[_TelemetryServicePushLogsType]):
 
     @typing.overload
     def __init__(self: TelemetryServiceStub[
+        grpc.aio.StreamStreamMultiCallable[
+            jumpstarter.v1.telemetry_pb2.MetricsStreamRequest,
+            jumpstarter.v1.telemetry_pb2.MetricsStreamResponse,
+        ],
         grpc.aio.UnaryUnaryMultiCallable[
             jumpstarter.v1.telemetry_pb2.PushLogsRequest,
             jumpstarter.v1.telemetry_pb2.PushLogsResponse,
         ],
     ], channel: grpc.aio.Channel) -> None: ...
 
+    MetricsStream: _TelemetryServiceMetricsStreamType
+    """Persistent bidirectional stream: telemetry sends scrape requests,
+    exporter responds with full metric snapshots (OpenMetrics text).
+    """
+
     PushLogs: _TelemetryServicePushLogsType
     """Push structured log entries to the telemetry service for Loki ingest."""
 
 TelemetryServiceAsyncStub: typing_extensions.TypeAlias = TelemetryServiceStub[
+    grpc.aio.StreamStreamMultiCallable[
+        jumpstarter.v1.telemetry_pb2.MetricsStreamRequest,
+        jumpstarter.v1.telemetry_pb2.MetricsStreamResponse,
+    ],
     grpc.aio.UnaryUnaryMultiCallable[
         jumpstarter.v1.telemetry_pb2.PushLogsRequest,
         jumpstarter.v1.telemetry_pb2.PushLogsResponse,
@@ -73,9 +106,19 @@ TelemetryServiceAsyncStub: typing_extensions.TypeAlias = TelemetryServiceStub[
 ]
 
 class TelemetryServiceServicer(metaclass=abc.ABCMeta):
-    """A service that receives structured logs from exporters and clients.
+    """A service that reverse-scrapes exporter metrics and receives structured logs.
     Implemented by jumpstarter-telemetry; not part of the controller.
     """
+
+    @abc.abstractmethod
+    def MetricsStream(
+        self,
+        request_iterator: _MaybeAsyncIterator[jumpstarter.v1.telemetry_pb2.MetricsStreamRequest],
+        context: _ServicerContext,
+    ) -> typing.Union[collections.abc.Iterator[jumpstarter.v1.telemetry_pb2.MetricsStreamResponse], collections.abc.AsyncIterator[jumpstarter.v1.telemetry_pb2.MetricsStreamResponse]]:
+        """Persistent bidirectional stream: telemetry sends scrape requests,
+        exporter responds with full metric snapshots (OpenMetrics text).
+        """
 
     @abc.abstractmethod
     def PushLogs(

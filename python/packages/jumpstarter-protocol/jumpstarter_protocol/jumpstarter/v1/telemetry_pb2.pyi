@@ -20,6 +20,103 @@ else:
 DESCRIPTOR: google.protobuf.descriptor.FileDescriptor
 
 @typing.final
+class MetricsStreamRequest(google.protobuf.message.Message):
+    """Exporter → Telemetry"""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    REGISTER_FIELD_NUMBER: builtins.int
+    SCRAPE_RESPONSE_FIELD_NUMBER: builtins.int
+    @property
+    def register(self) -> Global___MetricsRegister:
+        """First message: identify this exporter."""
+
+    @property
+    def scrape_response(self) -> Global___MetricsScrapeResponse:
+        """Subsequent: reply to a scrape."""
+
+    def __init__(
+        self,
+        *,
+        register: Global___MetricsRegister | None = ...,
+        scrape_response: Global___MetricsScrapeResponse | None = ...,
+    ) -> None: ...
+    def HasField(self, field_name: typing.Literal["msg", b"msg", "register", b"register", "scrape_response", b"scrape_response"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["msg", b"msg", "register", b"register", "scrape_response", b"scrape_response"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["msg", b"msg"]) -> typing.Literal["register", "scrape_response"] | None: ...
+
+Global___MetricsStreamRequest: typing_extensions.TypeAlias = MetricsStreamRequest
+
+@typing.final
+class MetricsRegister(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    IDENTITY_FIELD_NUMBER: builtins.int
+    identity: builtins.str
+    """Exporter CRD name (verified against the auth token by the server)."""
+    def __init__(
+        self,
+        *,
+        identity: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(self, field_name: typing.Literal["identity", b"identity"]) -> None: ...
+
+Global___MetricsRegister: typing_extensions.TypeAlias = MetricsRegister
+
+@typing.final
+class MetricsScrapeResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    METRICS_TEXT_FIELD_NUMBER: builtins.int
+    TIMESTAMP_FIELD_NUMBER: builtins.int
+    metrics_text: builtins.bytes
+    """generate_latest() OpenMetrics output."""
+    @property
+    def timestamp(self) -> google.protobuf.timestamp_pb2.Timestamp: ...
+    def __init__(
+        self,
+        *,
+        metrics_text: builtins.bytes = ...,
+        timestamp: google.protobuf.timestamp_pb2.Timestamp | None = ...,
+    ) -> None: ...
+    def HasField(self, field_name: typing.Literal["timestamp", b"timestamp"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["metrics_text", b"metrics_text", "timestamp", b"timestamp"]) -> None: ...
+
+Global___MetricsScrapeResponse: typing_extensions.TypeAlias = MetricsScrapeResponse
+
+@typing.final
+class MetricsStreamResponse(google.protobuf.message.Message):
+    """Telemetry → Exporter"""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SCRAPE_REQUEST_FIELD_NUMBER: builtins.int
+    @property
+    def scrape_request(self) -> Global___MetricsScrapeRequest: ...
+    def __init__(
+        self,
+        *,
+        scrape_request: Global___MetricsScrapeRequest | None = ...,
+    ) -> None: ...
+    def HasField(self, field_name: typing.Literal["msg", b"msg", "scrape_request", b"scrape_request"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["msg", b"msg", "scrape_request", b"scrape_request"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["msg", b"msg"]) -> typing.Literal["scrape_request"] | None: ...
+
+Global___MetricsStreamResponse: typing_extensions.TypeAlias = MetricsStreamResponse
+
+@typing.final
+class MetricsScrapeRequest(google.protobuf.message.Message):
+    """Empty request: "send your /metrics now"."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+Global___MetricsScrapeRequest: typing_extensions.TypeAlias = MetricsScrapeRequest
+
+@typing.final
 class PushLogsRequest(google.protobuf.message.Message):
     """Request to push log entries to the telemetry service."""
 
@@ -96,6 +193,7 @@ class LogEntry(google.protobuf.message.Message):
     RESULT_FIELD_NUMBER: builtins.int
     DRIVER_TYPE_FIELD_NUMBER: builtins.int
     EXTRA_FIELDS_FIELD_NUMBER: builtins.int
+    NAMESPACE_FIELD_NUMBER: builtins.int
     severity: builtins.str
     """Log severity: debug, info, warning, error, critical."""
     message: builtins.str
@@ -115,7 +213,9 @@ class LogEntry(google.protobuf.message.Message):
     driver_type: builtins.str
     """Log body: driver category (storage, power, network, etc.)."""
     namespace: builtins.str
-    """Loki stream label: Kubernetes namespace (bounded by cluster size)."""
+    """Capped at 16 entries, 64-char keys, 256-char values.
+    Loki stream label: Kubernetes namespace (bounded by cluster size).
+    """
     @property
     def timestamp(self) -> google.protobuf.timestamp_pb2.Timestamp:
         """When the log was emitted."""

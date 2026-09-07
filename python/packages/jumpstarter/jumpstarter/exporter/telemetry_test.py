@@ -37,10 +37,10 @@ def make_record(
     return record
 
 
-def make_handler(namespace: str = "", token: str = "") -> TelemetryLogHandler:
+def make_handler(namespace: str = "", token: str = "", component: str = "exporter") -> TelemetryLogHandler:
     stub = MagicMock()
     stub.PushLogs = AsyncMock()
-    return TelemetryLogHandler(stub, namespace=namespace, token=token)
+    return TelemetryLogHandler(stub, namespace=namespace, token=token, component=component)
 
 
 @pytest.fixture(autouse=False)
@@ -78,6 +78,11 @@ class TestPrepare:
         assert entry.message == "hello"
         assert entry.severity == "warning"
         assert entry.component == "exporter"
+
+    def test_cli_component(self):
+        handler = make_handler(component="cli")
+        entry = handler.prepare(make_record("from jmp"))
+        assert entry.component == "cli"
 
     def test_timestamp_is_set(self):
         handler = make_handler()

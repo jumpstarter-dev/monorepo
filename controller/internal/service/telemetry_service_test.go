@@ -163,6 +163,24 @@ func TestGetServiceEndpoints_DefaultsMinSeverityToInfo(t *testing.T) {
 	}
 }
 
+func TestGetServiceEndpoints_AcceptsClientToken(t *testing.T) {
+	svc, ctx := authSuccessClientServiceCtx(t, &config.Telemetry{
+		Enabled:  true,
+		Endpoint: "telemetry.jumpstarter.svc:9093",
+	})
+
+	resp, err := svc.GetServiceEndpoints(ctx, &pb.GetServiceEndpointsRequest{})
+	if err != nil {
+		t.Fatalf("GetServiceEndpoints with client token: %v", err)
+	}
+	if len(resp.TelemetryEndpoints) != 1 {
+		t.Fatalf("expected 1 telemetry endpoint, got %d", len(resp.TelemetryEndpoints))
+	}
+	if resp.TelemetryEndpoints[0].Endpoint != "telemetry.jumpstarter.svc:9093" {
+		t.Errorf("Endpoint = %q", resp.TelemetryEndpoints[0].Endpoint)
+	}
+}
+
 func TestGetServiceEndpoints_EnabledNoEndpoint_FailedPrecondition(t *testing.T) {
 	// This test exercises the empty-endpoint guard in the real GetServiceEndpoints
 	// handler — after authentication succeeds. Previously all GetServiceEndpoints
@@ -521,20 +539,74 @@ func TestTelemetryService_PushLogs_AllFieldsLogged(t *testing.T) {
 	}
 }
 
-func TestTelemetryService_PushLogs_RejectsNonExporterToken(t *testing.T) {
+func TestTelemetryService_PushLogs_AcceptsClientToken(t *testing.T) {
 	signer := testSigner(t)
 	svc := &TelemetryService{BindAddr: ":0", Signer: signer}
-	// A client token has a different subject format — must be rejected.
-	ctx := authedCtx(t, signer, "client:jumpstarter:some-client:uid1")
+	ctx := authedCtx(t, signer, "client:jumpstarter:ci-client:uid1")
 
-	_, err := svc.PushLogs(ctx, &pb.PushLogsRequest{Entries: []*pb.LogEntry{
-		{Severity: "info", Message: "sneaky"},
+	resp, err := svc.PushLogs(ctx, &pb.PushLogsRequest{Entries: []*pb.LogEntry{
+		{Severity: "info", Message: "from jmp", Component: "cli"},
 	}})
-	if err == nil {
-		t.Fatal("expected PushLogs to reject a non-exporter token")
+	if err != nil {
+		t.Fatalf("PushLogs with client token: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not an exporter token") {
-		t.Errorf("expected 'not an exporter token' in error, got: %v", err)
+	if resp.Accepted != 1 {
+		t.Errorf("Accepted = %d, want 1", resp.Accepted)
+	}
+}
+
+func TestTelemetryService_PushLogs_OverwritesClientFromToken(t *testing.T) {
+	signer := testSigner(t)
+	pusher, err := NewLokiPusher(LokiConfig{URL: "http://127.0.0.1:1", QueueDepth: 8}, testDroppedCounter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &TelemetryService{BindAddr: ":0", Signer: signer, Loki: pusher}
+	ctx := authedCtx(t, signer, "client:jumpstarter:ci-client:uid1")
+
+	resp, err := svc.PushLogs(ctx, &pb.PushLogsRequest{Entries: []*pb.LogEntry{{
+		Severity:  "info",
+		Message:   "from jmp",
+		Component: "cli",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Accepted != 1 {
+		t.Fatalf("Accepted = %d, want 1", resp.Accepted)
+	}
+	queued := pusher.queued()
+	if len(queued) != 1 {
+		t.Fatalf("queued = %d, want 1", len(queued))
+	}
+	if queued[0].Client != "ci-client" {
+		t.Errorf("client = %q, want token identity ci-client", queued[0].Client)
+	}
+	if queued[0].Namespace != "jumpstarter" {
+		t.Errorf("namespace = %q, want jumpstarter", queued[0].Namespace)
+	}
+	if queued[0].Exporter != "" {
+		t.Errorf("client PushLogs must not stamp exporter from the client name, got %q", queued[0].Exporter)
+	}
+}
+
+func TestTelemetryService_PushLogs_RejectsWrongClient(t *testing.T) {
+	signer := testSigner(t)
+	svc := &TelemetryService{BindAddr: ":0", Signer: signer}
+	ctx := authedCtx(t, signer, "client:jumpstarter:ci-client:uid1")
+
+	resp, err := svc.PushLogs(ctx, &pb.PushLogsRequest{Entries: []*pb.LogEntry{
+		{Severity: "info", Message: "ok", Component: "cli", Client: "ci-client"},
+		{Severity: "info", Message: "bad", Component: "cli", Client: "other-client"},
+	}})
+	if err != nil {
+		t.Fatalf("expected mismatch entries to be dropped, not fail the RPC: %v", err)
+	}
+	if resp.Accepted != 1 {
+		t.Errorf("Accepted = %d, want 1", resp.Accepted)
+	}
+	if resp.Dropped != 1 {
+		t.Errorf("Dropped = %d, want 1", resp.Dropped)
 	}
 }
 

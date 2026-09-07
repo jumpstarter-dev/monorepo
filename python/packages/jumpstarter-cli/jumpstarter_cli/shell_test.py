@@ -100,6 +100,35 @@ def test_shell_passes_exporter_name_to_lease_async():
     assert config.captured[1] == "laptop-test-exporter"
 
 
+def test_shell_attaches_client_telemetry():
+    config = _DummyConfig()
+
+    with (
+        patch(
+            "jumpstarter_cli.shell.attach_client_telemetry",
+            new=AsyncMock(return_value=None),
+        ) as mock_attach,
+        patch(
+            "jumpstarter_cli.shell._run_shell_with_lease_async",
+            new=AsyncMock(return_value=0),
+        ),
+    ):
+        exit_code = anyio.run(
+            _shell_with_signal_handling,
+            config,
+            None,
+            "laptop-test-exporter",
+            None,
+            timedelta(minutes=1),
+            False,
+            (),
+            None,
+        )
+
+    assert exit_code == 0
+    mock_attach.assert_awaited()
+
+
 async def test_shell_warns_when_expired_token_prevents_cleanup_on_normal_exit():
     lease = Mock()
     lease.release = True

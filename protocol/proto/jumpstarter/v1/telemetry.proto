@@ -6,12 +6,43 @@ package jumpstarter.v1;
 
 import "google/protobuf/timestamp.proto";
 
-// A service that receives structured logs from exporters and clients.
+// A service that reverse-scrapes exporter metrics and receives structured logs.
 // Implemented by jumpstarter-telemetry; not part of the controller.
 service TelemetryService {
+  // Persistent bidirectional stream: telemetry sends scrape requests,
+  // exporter responds with full metric snapshots (OpenMetrics text).
+  rpc MetricsStream(stream MetricsStreamRequest) returns (stream MetricsStreamResponse);
+
   // Push structured log entries to the telemetry service for Loki ingest.
   rpc PushLogs(PushLogsRequest) returns (PushLogsResponse);
 }
+
+// Exporter → Telemetry
+message MetricsStreamRequest {
+  oneof msg {
+    MetricsRegister register = 1;                    // First message: identify this exporter.
+    MetricsScrapeResponse scrape_response = 2;       // Subsequent: reply to a scrape.
+  }
+}
+
+message MetricsRegister {
+  string identity = 1; // Exporter CRD name (verified against the auth token by the server).
+}
+
+message MetricsScrapeResponse {
+  bytes metrics_text = 1;                // generate_latest() OpenMetrics output.
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// Telemetry → Exporter
+message MetricsStreamResponse {
+  oneof msg {
+    MetricsScrapeRequest scrape_request = 1;
+  }
+}
+
+// Empty request: "send your /metrics now".
+message MetricsScrapeRequest {}
 
 // Request to push log entries to the telemetry service.
 message PushLogsRequest {

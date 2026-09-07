@@ -319,9 +319,11 @@ func (s *ControllerService) GetServiceEndpoints(
 	ctx context.Context,
 	req *pb.GetServiceEndpointsRequest,
 ) (*pb.GetServiceEndpointsResponse, error) {
-	// Require a valid exporter token — endpoint discovery is not public.
+	// Require a valid exporter or client token — endpoint discovery is not public.
 	if _, err := s.authenticateExporter(ctx); err != nil {
-		return nil, err
+		if _, err2 := s.authenticateClient(ctx); err2 != nil {
+			return nil, err
+		}
 	}
 
 	resp := &pb.GetServiceEndpointsResponse{}
