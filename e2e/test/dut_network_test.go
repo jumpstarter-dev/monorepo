@@ -255,39 +255,232 @@ var _ = Describe("DUT Network E2E Tests", Label("dut-network"), Ordered, Continu
 
 	Context("TCP connectivity", func() {
 		It("should allow TCP connections from DUT to external via NAT", func() {
-			serverScript := "import socket; " +
-				"s=socket.socket(); " +
-				"s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); " +
-				"s.bind(('',9998)); " +
-				"s.listen(1); " +
-				"s.settimeout(10); " +
-				"conn,_=s.accept(); " +
-				"conn.sendall(b'E2E_OK'); " +
-				"conn.close(); " +
-				"s.close()"
+			srv := startTCPServer(extNs, 9998, "E2E_OK")
+			defer killCmd(srv)
 
-			fullArgs := []string{"ip", "netns", "exec", extNs, "python3", "-c", serverScript}
-			bin, cmdArgs := sudoArgs(fullArgs...)
-			listener := exec.Command(bin, cmdArgs...) //nolint:gosec
-			listener.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			Expect(listener.Start()).To(Succeed())
-			defer func() {
-				_ = syscall.Kill(-listener.Process.Pid, syscall.SIGKILL)
-				_ = listener.Wait()
-			}()
-
-			time.Sleep(500 * time.Millisecond)
-
-			clientScript := fmt.Sprintf(
-				"import socket; "+
-					"s=socket.create_connection(('%s',9998),timeout=5); "+
-					"data=s.recv(10); "+
-					"s.close(); "+
-					"print(data.decode())",
-				extIP)
-			out, err := runInNsCapture(dutNs, "python3", "-c", clientScript)
+			out, err := tcpConnect(dutNs, extIP, 9998, 5)
 			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("TCP connection failed: %s", out))
 			Expect(out).To(ContainSubstring("E2E_OK"))
+		})
+	})
+})
+
+// startTCPServer starts a one-shot TCP listener in the given network namespace.
+// It accepts a single connection, sends payload, and exits.  The function
+// waits for a "READY" line on stdout (emitted after listen()) so callers
+// know the port is actually open before sending traffic.  Returns the
+// *exec.Cmd so the caller can clean up via process-group kill.
+func startTCPServer(ns string, port int, payload string) *exec.Cmd {
+	serverScript := fmt.Sprintf(
+		"import socket,sys; "+
+			"s=socket.socket(); "+
+			"s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); "+
+			"s.bind(('', %d)); "+
+			"s.listen(1); "+
+			"print('READY',flush=True); "+
+			"s.settimeout(15); "+
+			"conn,_=s.accept(); "+
+			"conn.sendall(b'%s'); "+
+			"conn.close(); "+
+			"s.close()", port, payload)
+	fullArgs := []string{"ip", "netns", "exec", ns, "python3", "-u", "-c", serverScript}
+	bin, cmdArgs := sudoArgs(fullArgs...)
+	cmd := exec.Command(bin, cmdArgs...) //nolint:gosec
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stdout, err := cmd.StdoutPipe()
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	ExpectWithOffset(1, cmd.Start()).To(Succeed())
+
+	readyCh := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 64)
+		n, readErr := stdout.Read(buf)
+		if readErr != nil {
+			readyCh <- fmt.Errorf("server stdout read failed: %w", readErr)
+			return
+		}
+		if !strings.Contains(string(buf[:n]), "READY") {
+			readyCh <- fmt.Errorf("unexpected server output: %s", string(buf[:n]))
+			return
+		}
+		readyCh <- nil
+	}()
+
+	select {
+	case readyErr := <-readyCh:
+		ExpectWithOffset(1, readyErr).NotTo(HaveOccurred(),
+			fmt.Sprintf("TCP server on port %d failed to become ready", port))
+	case <-time.After(5 * time.Second):
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		Fail(fmt.Sprintf("TCP server on port %d did not become ready within 5s", port))
+	}
+
+	return cmd
+}
+
+// killCmd sends SIGKILL to the process group and waits for exit.
+func killCmd(cmd *exec.Cmd) {
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = cmd.Wait()
+}
+
+// tcpConnect attempts a TCP connection from the given namespace to host:port
+// and returns whatever the server sends.
+func tcpConnect(ns string, host string, port int, timeoutSec int) (string, error) {
+	clientScript := fmt.Sprintf(
+		"import socket; "+
+			"s=socket.create_connection(('%s',%d),timeout=%d); "+
+			"data=s.recv(64); "+
+			"s.close(); "+
+			"print(data.decode())",
+		host, port, timeoutSec)
+	return runInNsCapture(ns, "python3", "-c", clientScript)
+}
+
+// Serial: reuses the same veth topology as the base dut-network tests but
+// starts the exporter with a filter config that restricts egress to a single
+// TCP port.  Verifies that allowed traffic passes and everything else is dropped.
+var _ = Describe("DUT Network Filter E2E Tests", Label("dut-network"), Ordered, ContinueOnFailure, Serial, func() {
+	var (
+		tracker      *ProcessTracker
+		listenerPort = 19092
+		exporterDir  string
+	)
+
+	const (
+		dutNs      = "jmp-e2e-dut"
+		extNs      = "jmp-e2e-ext"
+		vethHost   = "jmp-vhost"
+		vethDut    = "jmp-vdut"
+		vethUp     = "jmp-vup"
+		vethExt    = "jmp-vext"
+		nftTable   = "jumpstarter_jmp_vhost"
+		dutIP      = "192.168.200.10"
+		gatewayIP  = "192.168.200.1"
+		extIP      = "10.99.0.1"
+		upstreamIP = "10.99.0.2"
+		subnet     = "192.168.200.0/24"
+		allowedPort  = 9997
+		blockedPort  = 9998
+	)
+
+	setupNetworkNamespaces := func() {
+		runOrFail("ip", "netns", "add", dutNs)
+		runOrFail("ip", "netns", "add", extNs)
+		runOrFail("ip", "link", "add", vethHost, "type", "veth", "peer", "name", vethDut)
+		runOrFail("ip", "link", "set", vethDut, "netns", dutNs)
+		runOrFail("ip", "link", "set", vethHost, "address", "02:00:00:00:00:01")
+		runOrFail("ip", "link", "add", vethUp, "type", "veth", "peer", "name", vethExt)
+		runOrFail("ip", "link", "set", vethExt, "netns", extNs)
+		runOrFail("ip", "addr", "add", upstreamIP+"/24", "dev", vethUp)
+		runOrFail("ip", "link", "set", vethUp, "up")
+		runInNs(extNs, "ip", "addr", "add", extIP+"/24", "dev", vethExt)
+		runInNs(extNs, "ip", "link", "set", vethExt, "up")
+		runInNs(extNs, "ip", "link", "set", "lo", "up")
+		runInNs(extNs, "ip", "route", "add", subnet, "via", upstreamIP)
+		runInNs(dutNs, "ip", "addr", "add", dutIP+"/24", "dev", vethDut)
+		runInNs(dutNs, "ip", "link", "set", vethDut, "up")
+		runInNs(dutNs, "ip", "link", "set", "lo", "up")
+		runInNs(dutNs, "ip", "route", "add", "default", "via", gatewayIP)
+	}
+
+	teardownNetworkNamespaces := func() {
+		runIgnoreErr("ip", "link", "del", vethHost)
+		runIgnoreErr("ip", "link", "del", vethUp)
+		runIgnoreErr("ip", "netns", "del", dutNs)
+		runIgnoreErr("ip", "netns", "del", extNs)
+		runIgnoreErr("nft", "delete", "table", "ip", nftTable)
+		runIgnoreErr("rm", "-rf", "/tmp/jmp-e2e-dut-network-filter")
+	}
+
+	BeforeAll(func() {
+		if runtime.GOOS != "linux" {
+			Skip("requires Linux")
+		}
+		if !hasPrivileges() {
+			Skip("requires root or passwordless sudo")
+		}
+		tracker = NewProcessTracker()
+		exporterDir = filepath.Join(RepoRoot(), "e2e", "exporters")
+		teardownNetworkNamespaces()
+		setupNetworkNamespaces()
+
+		configPath := filepath.Join(exporterDir, "exporter-dut-network-filter.yaml")
+		tracker.StartDirectExporter(configPath, listenerPort, "", false)
+		WaitForDirectExporterReady(listenerPort, "")
+	})
+
+	AfterAll(func() {
+		tracker.StopAll()
+		teardownNetworkNamespaces()
+
+		Eventually(func() error {
+			conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", listenerPort), 500*time.Millisecond)
+			if err != nil {
+				return nil
+			}
+			conn.Close()
+			return fmt.Errorf("port %d is still open", listenerPort)
+		}, 10*time.Second, 500*time.Millisecond).Should(Succeed(),
+			"port %d should be closed after stopping exporter", listenerPort)
+
+		tracker.Cleanup()
+	})
+
+	BeforeEach(func() {
+		tracker.WriteLogMarker(CurrentSpecReport().FullText())
+	})
+
+	AfterEach(func() {
+		if CurrentSpecReport().Failed() {
+			tracker.DumpLogs(250)
+		}
+	})
+
+	jmpShell := func(args ...string) (string, error) {
+		shellArgs := []string{"shell", "--tls-grpc", fmt.Sprintf("127.0.0.1:%d", listenerPort),
+			"--tls-grpc-insecure", "--"}
+		shellArgs = append(shellArgs, args...)
+		return Jmp(shellArgs...)
+	}
+
+	Context("Filter rules visible in NAT output", func() {
+		It("should show filter rules in nftables output", func() {
+			out, err := jmpShell("j", "dut-network", "nat-rules")
+			Expect(err).NotTo(HaveOccurred(), out)
+			Expect(out).To(ContainSubstring("drop"))
+			Expect(out).To(ContainSubstring(fmt.Sprintf("dport %d", allowedPort)))
+		})
+	})
+
+	Context("Allowed traffic passes through filter", func() {
+		It("should allow TCP to the permitted port", func() {
+			srv := startTCPServer(extNs, allowedPort, "FILTER_OK")
+			defer killCmd(srv)
+
+			out, err := tcpConnect(dutNs, extIP, allowedPort, 5)
+			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("allowed TCP failed: %s", out))
+			Expect(out).To(ContainSubstring("FILTER_OK"))
+		})
+	})
+
+	Context("Blocked traffic is dropped by filter", func() {
+		It("should block TCP to a non-allowed port", func() {
+			srv := startTCPServer(extNs, blockedPort, "SHOULD_NOT_ARRIVE")
+			defer killCmd(srv)
+
+			_, err := tcpConnect(dutNs, extIP, blockedPort, 3)
+			Expect(err).To(HaveOccurred(), "connection to blocked port should fail")
+		})
+
+		It("should block ICMP ping when egress policy is drop", func() {
+			Consistently(func() error {
+				_, err := runInNsCapture(dutNs, "ping", "-c", "1", "-W", "1", extIP)
+				return err
+			}, 3*time.Second, 1*time.Second).Should(HaveOccurred(),
+				"ping should be blocked by egress drop policy")
 		})
 	})
 })
