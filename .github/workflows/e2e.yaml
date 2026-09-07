@@ -411,7 +411,7 @@ jobs:
         env:
           CI: true
           # renovate: datasource=github-releases depName=jumpstarter-dev/jumpstarter
-          COMPAT_CONTROLLER_TAG: v0.8.1
+          COMPAT_CONTROLLER_TAG: v0.9.0
 
       - name: Run compat tests (old controller + new client/exporter)
         run: make e2e-compat-run COMPAT_TEST=old-controller
@@ -469,7 +469,7 @@ jobs:
         env:
           CI: true
           # renovate: datasource=pypi depName=jumpstarter
-          COMPAT_CLIENT_VERSION: "0.7.4"
+          COMPAT_CLIENT_VERSION: "0.8.1"
           SKIP_BUILD: "true"
           PREBUILT_WHEELS_DIR: /tmp/python-wheels
           OPERATOR_IMG: quay.io/jumpstarter-dev/jumpstarter-operator:latest
