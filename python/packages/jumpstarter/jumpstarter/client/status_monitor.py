@@ -88,11 +88,18 @@ class StatusMonitor:
         # Track if connection was lost (UNAVAILABLE)
         self._connection_lost: bool = False
 
+        # Set once the first GetStatus answer has been processed, or once the
+        # poll loop stops without ever getting one. Until then current_status is
+        # None, which a caller cannot tell apart from "observed, but not the
+        # status you asked for".
+        self._first_observation: Event = Event()
+
     def _signal_unsupported(self):
         """Mark GetStatus as unsupported and signal waiters with LEASE_READY."""
         self._get_status_unsupported = True
         self._current_status = ExporterStatus.LEASE_READY
         self._running = False
+        self._first_observation.set()
         self._any_change_event.set()
         self._any_change_event = Event()
 
@@ -216,6 +223,27 @@ class StatusMonitor:
             return False
         else:
             return await wait_loop()
+
+    async def wait_for_first_observation(self, timeout: float | None = None) -> bool:
+        """Wait until the first GetStatus answer has been processed.
+
+        Until that happens current_status is None, which reads the same as "not
+        the status you asked for". A caller that has to tell those apart — so it
+        does not report waiting on something that already finished — waits for
+        this rather than guessing a settle time, which a slow or distant link
+        would outlast.
+
+        Returns True once a status has been observed, False if the wait timed
+        out or the monitor stopped without ever getting an answer. Returns
+        immediately when GetStatus is unsupported, where LEASE_READY is assumed
+        without polling.
+        """
+        if timeout is None:
+            await self._first_observation.wait()
+        else:
+            with anyio.move_on_after(timeout):
+                await self._first_observation.wait()
+        return self._current_status is not None
 
     async def wait_for_any_of(  # noqa: C901
         self, targets: list[ExporterStatus], timeout: float | None = None
@@ -358,10 +386,16 @@ class StatusMonitor:
                 self._status_message = response.message or ""
                 self._status_version = new_version
                 self._previous_status = previous
+                self._first_observation.set()
 
                 # Fire events if status changed
                 if old_status != new_status:
-                    logger.info(f"Status changed: {old_status} -> {new_status} (version={new_version})")
+                    # The first poll is an observation, not a transition: reporting
+                    # it as one is noise when attaching to an already-ready lease.
+                    if old_status is None:
+                        logger.debug(f"Exporter status: {new_status} (version={new_version})")
+                    else:
+                        logger.info(f"Status changed: {old_status} -> {new_status} (version={new_version})")
 
                     # Fire specific status event
                     if new_status in self._status_events:
@@ -457,6 +491,9 @@ class StatusMonitor:
                 break
 
         logger.debug("Status monitor poll loop exited (running=%s)", self._running)
+        # Nothing else will observe a status now, so release anyone waiting on
+        # the first one rather than leaving them to sit out their timeout.
+        self._first_observation.set()
 
     async def start(self, task_group=None):
         """Start the background polling task.

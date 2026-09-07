@@ -839,6 +839,9 @@ class _FakeStatusMonitor:
     def connection_lost(self):
         return self._connection_lost
 
+    async def wait_for_first_observation(self, timeout=None):
+        return self.current_status is not None
+
     async def wait_for_any_of(self, targets, timeout=None):
         for s in self._statuses:
             if s in targets:

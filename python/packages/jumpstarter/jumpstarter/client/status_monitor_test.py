@@ -995,3 +995,62 @@ class TestStatusMonitorPRIssues:
 
         assert result == ExporterStatus.AVAILABLE
         assert monitor.connection_lost is False
+
+
+class TestWaitForFirstObservation:
+    async def test_waits_out_a_slow_first_answer(self) -> None:
+        """A distant or loaded exporter can take longer than any settle time.
+
+        The caller has to know whether a status has been observed, not whether
+        some number of seconds has passed, so the wait tracks the answer.
+        """
+
+        class SlowStub(MockExporterStub):
+            async def GetStatus(self, request, timeout=None):
+                await anyio.sleep(0.4)
+                return await super().GetStatus(request, timeout=timeout)
+
+        stub = SlowStub([create_status_response(ExporterStatus.LEASE_READY, version=1)])
+        monitor = StatusMonitor(stub, poll_interval=0.05)
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+            # Shorter than the answer takes: no observation yet.
+            assert await monitor.wait_for_first_observation(timeout=0.1) is False
+            assert monitor.current_status is None
+            # Long enough: the answer lands and is reported as observed.
+            assert await monitor.wait_for_first_observation(timeout=2.0) is True
+            assert monitor.current_status == ExporterStatus.LEASE_READY
+            await monitor.stop()
+
+    async def test_returns_once_the_first_answer_lands(self) -> None:
+        stub = MockExporterStub([create_status_response(ExporterStatus.AVAILABLE, version=1)])
+        monitor = StatusMonitor(stub, poll_interval=0.05)
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+            assert await monitor.wait_for_first_observation(timeout=2.0) is True
+            assert monitor.current_status == ExporterStatus.AVAILABLE
+            await monitor.stop()
+
+    async def test_does_not_block_when_get_status_is_unsupported(self) -> None:
+        """LEASE_READY is assumed without polling, so there is nothing to wait for."""
+        monitor = StatusMonitor(MockExporterStub([]), poll_interval=0.05, get_status_unsupported=True)
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+            assert await monitor.wait_for_first_observation(timeout=2.0) is True
+            assert monitor.current_status == ExporterStatus.LEASE_READY
+            await monitor.stop()
+
+    async def test_releases_waiters_when_the_monitor_stops(self) -> None:
+        """A stopped monitor will never observe anything, so waiters must not
+        sit out their whole timeout."""
+        stub = MockExporterStub([AioRpcError(StatusCode.UNAVAILABLE, None, None)])
+        monitor = StatusMonitor(stub, poll_interval=0.05)
+
+        async with anyio.create_task_group() as tg:
+            await monitor.start(tg)
+            await monitor.stop()
+            with anyio.fail_after(2.0):
+                assert await monitor.wait_for_first_observation(timeout=30.0) is False
