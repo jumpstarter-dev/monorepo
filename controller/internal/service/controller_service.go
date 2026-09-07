@@ -342,6 +342,65 @@ func (s *ControllerService) GetServiceEndpoints(
 	return resp, nil
 }
 
+// RotateToken signs a new token for the authenticated exporter, updates the
+// corresponding Secret in Kubernetes, and returns the new token and its expiry.
+func (s *ControllerService) RotateToken(
+	ctx context.Context,
+	req *pb.RotateTokenRequest,
+) (*pb.RotateTokenResponse, error) {
+	exporter, err := s.authenticateExporter(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.Signer == nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "token signer not configured")
+	}
+
+	token, err := s.Signer.Token(exporter.InternalSubject())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to sign token: %s", err)
+	}
+
+	secretName := exporter.Name + "-exporter"
+	var secret corev1.Secret
+	if err := s.Client.Get(ctx, types.NamespacedName{
+		Namespace: exporter.Namespace,
+		Name:      secretName,
+	}, &secret); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get credential secret: %s", err)
+	}
+
+	original := client.MergeFrom(secret.DeepCopy())
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+	secret.Data[controller.TokenKey] = []byte(token)
+	if err := s.Client.Patch(ctx, &secret, original); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update credential secret: %s", err)
+	}
+
+	log.FromContext(ctx).Info("token rotated", "exporter", exporter.Name, "namespace", exporter.Namespace)
+
+	claims := &struct {
+		jwt.RegisteredClaims
+	}{}
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	if _, _, err := parser.ParseUnverified(token, claims); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to parse token claims: %s", err)
+	}
+
+	var expiry *timestamppb.Timestamp
+	if claims.ExpiresAt != nil {
+		expiry = timestamppb.New(claims.ExpiresAt.Time)
+	}
+
+	return &pb.RotateTokenResponse{
+		Token:  token,
+		Expiry: expiry,
+	}, nil
+}
+
 func (s *ControllerService) Unregister(
 	ctx context.Context,
 	req *pb.UnregisterRequest,

@@ -52,13 +52,16 @@ type ExporterStatus struct {
 	ExporterStatusValue string `json:"exporterStatus,omitempty"`
 	// StatusMessage is an optional human-readable message describing the current state
 	StatusMessage string `json:"statusMessage,omitempty"`
+	// TokenExpiresAt is the expiry time of the internal credential token.
+	TokenExpiresAt *metav1.Time `json:"tokenExpiresAt,omitempty"`
 }
 
 type ExporterConditionType string
 
 const (
-	ExporterConditionTypeRegistered ExporterConditionType = "Registered"
-	ExporterConditionTypeOnline     ExporterConditionType = "Online"
+	ExporterConditionTypeRegistered    ExporterConditionType = "Registered"
+	ExporterConditionTypeOnline        ExporterConditionType = "Online"
+	ExporterConditionTypeTokenExpiring ExporterConditionType = "TokenExpiring"
 )
 
 // ExporterStatus values - PascalCase for Kubernetes, converted from proto ALL_CAPS
@@ -78,6 +81,7 @@ const (
 // +kubebuilder:printcolumn:name="Enabled",type="boolean",JSONPath=".spec.enabled"
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.exporterStatus"
 // +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.statusMessage",priority=1
+// +kubebuilder:printcolumn:name="Token Expires",type="string",JSONPath=".status.tokenExpiresAt"
 
 // Exporter is the Schema for the exporters API
 type Exporter struct {

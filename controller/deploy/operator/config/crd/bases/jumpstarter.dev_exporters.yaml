@@ -25,6 +25,9 @@ spec:
       name: Message
       priority: 1
       type: string
+    - jsonPath: .status.tokenExpiresAt
+      name: Token Expires
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -202,6 +205,11 @@ spec:
               statusMessage:
                 description: StatusMessage is an optional human-readable message describing
                   the current state
+                type: string
+              tokenExpiresAt:
+                description: TokenExpiresAt is the expiry time of the internal credential
+                  token.
+                format: date-time
                 type: string
             type: object
         type: object

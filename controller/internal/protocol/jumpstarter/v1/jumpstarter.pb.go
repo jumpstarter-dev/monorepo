@@ -1965,6 +1965,96 @@ func (x *TelemetryEndpoint) GetMinSeverity() string {
 	return ""
 }
 
+// Request to rotate the authentication token for an exporter.
+type RotateTokenRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RotateTokenRequest) Reset() {
+	*x = RotateTokenRequest{}
+	mi := &file_jumpstarter_v1_jumpstarter_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateTokenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateTokenRequest) ProtoMessage() {}
+
+func (x *RotateTokenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_jumpstarter_v1_jumpstarter_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateTokenRequest.ProtoReflect.Descriptor instead.
+func (*RotateTokenRequest) Descriptor() ([]byte, []int) {
+	return file_jumpstarter_v1_jumpstarter_proto_rawDescGZIP(), []int{37}
+}
+
+// Response containing the newly rotated token.
+type RotateTokenResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`   // The new authentication token.
+	Expiry        *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expiry,proto3" json:"expiry,omitempty"` // The expiration time of the new token.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RotateTokenResponse) Reset() {
+	*x = RotateTokenResponse{}
+	mi := &file_jumpstarter_v1_jumpstarter_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateTokenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateTokenResponse) ProtoMessage() {}
+
+func (x *RotateTokenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_jumpstarter_v1_jumpstarter_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateTokenResponse.ProtoReflect.Descriptor instead.
+func (*RotateTokenResponse) Descriptor() ([]byte, []int) {
+	return file_jumpstarter_v1_jumpstarter_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *RotateTokenResponse) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *RotateTokenResponse) GetExpiry() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Expiry
+	}
+	return nil
+}
+
 var File_jumpstarter_v1_jumpstarter_proto protoreflect.FileDescriptor
 
 const file_jumpstarter_v1_jumpstarter_proto_rawDesc = "" +
@@ -2125,7 +2215,11 @@ const file_jumpstarter_v1_jumpstarter_proto_rawDesc = "" +
 	"\x11TelemetryEndpoint\x12\x1a\n" +
 	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12 \n" +
 	"\vcertificate\x18\x02 \x01(\tR\vcertificate\x12!\n" +
-	"\fmin_severity\x18\x03 \x01(\tR\vminSeverity2\xb5\a\n" +
+	"\fmin_severity\x18\x03 \x01(\tR\vminSeverity\"\x14\n" +
+	"\x12RotateTokenRequest\"_\n" +
+	"\x13RotateTokenResponse\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x122\n" +
+	"\x06expiry\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x06expiry2\x8d\b\n" +
 	"\x11ControllerService\x12M\n" +
 	"\bRegister\x12\x1f.jumpstarter.v1.RegisterRequest\x1a .jumpstarter.v1.RegisterResponse\x12S\n" +
 	"\n" +
@@ -2139,7 +2233,8 @@ const file_jumpstarter_v1_jumpstarter_proto_rawDesc = "" +
 	"\fReleaseLease\x12#.jumpstarter.v1.ReleaseLeaseRequest\x1a$.jumpstarter.v1.ReleaseLeaseResponse\x12S\n" +
 	"\n" +
 	"ListLeases\x12!.jumpstarter.v1.ListLeasesRequest\x1a\".jumpstarter.v1.ListLeasesResponse\x12n\n" +
-	"\x13GetServiceEndpoints\x12*.jumpstarter.v1.GetServiceEndpointsRequest\x1a+.jumpstarter.v1.GetServiceEndpointsResponse2\xd7\x04\n" +
+	"\x13GetServiceEndpoints\x12*.jumpstarter.v1.GetServiceEndpointsRequest\x1a+.jumpstarter.v1.GetServiceEndpointsResponse\x12V\n" +
+	"\vRotateToken\x12\".jumpstarter.v1.RotateTokenRequest\x1a#.jumpstarter.v1.RotateTokenResponse2\xd7\x04\n" +
 	"\x0fExporterService\x12F\n" +
 	"\tGetReport\x12\x16.google.protobuf.Empty\x1a!.jumpstarter.v1.GetReportResponse\x12S\n" +
 	"\n" +
@@ -2164,7 +2259,7 @@ func file_jumpstarter_v1_jumpstarter_proto_rawDescGZIP() []byte {
 	return file_jumpstarter_v1_jumpstarter_proto_rawDescData
 }
 
-var file_jumpstarter_v1_jumpstarter_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
+var file_jumpstarter_v1_jumpstarter_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
 var file_jumpstarter_v1_jumpstarter_proto_goTypes = []any{
 	(*RegisterRequest)(nil),             // 0: jumpstarter.v1.RegisterRequest
 	(*DriverInstanceReport)(nil),        // 1: jumpstarter.v1.DriverInstanceReport
@@ -2203,89 +2298,94 @@ var file_jumpstarter_v1_jumpstarter_proto_goTypes = []any{
 	(*GetServiceEndpointsRequest)(nil),  // 34: jumpstarter.v1.GetServiceEndpointsRequest
 	(*GetServiceEndpointsResponse)(nil), // 35: jumpstarter.v1.GetServiceEndpointsResponse
 	(*TelemetryEndpoint)(nil),           // 36: jumpstarter.v1.TelemetryEndpoint
-	nil,                                 // 37: jumpstarter.v1.RegisterRequest.LabelsEntry
-	nil,                                 // 38: jumpstarter.v1.DriverInstanceReport.LabelsEntry
-	nil,                                 // 39: jumpstarter.v1.DriverInstanceReport.MethodsDescriptionEntry
-	nil,                                 // 40: jumpstarter.v1.StatusResponse.ContextEntry
-	nil,                                 // 41: jumpstarter.v1.GetReportResponse.LabelsEntry
-	nil,                                 // 42: jumpstarter.v1.LogStreamResponse.StructuredFieldsEntry
-	(ExporterStatus)(0),                 // 43: jumpstarter.v1.ExporterStatus
-	(*structpb.Value)(nil),              // 44: google.protobuf.Value
-	(LogSource)(0),                      // 45: jumpstarter.v1.LogSource
-	(*timestamppb.Timestamp)(nil),       // 46: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),         // 47: google.protobuf.Duration
-	(*LabelSelector)(nil),               // 48: jumpstarter.v1.LabelSelector
-	(*Condition)(nil),                   // 49: jumpstarter.v1.Condition
-	(*emptypb.Empty)(nil),               // 50: google.protobuf.Empty
+	(*RotateTokenRequest)(nil),          // 37: jumpstarter.v1.RotateTokenRequest
+	(*RotateTokenResponse)(nil),         // 38: jumpstarter.v1.RotateTokenResponse
+	nil,                                 // 39: jumpstarter.v1.RegisterRequest.LabelsEntry
+	nil,                                 // 40: jumpstarter.v1.DriverInstanceReport.LabelsEntry
+	nil,                                 // 41: jumpstarter.v1.DriverInstanceReport.MethodsDescriptionEntry
+	nil,                                 // 42: jumpstarter.v1.StatusResponse.ContextEntry
+	nil,                                 // 43: jumpstarter.v1.GetReportResponse.LabelsEntry
+	nil,                                 // 44: jumpstarter.v1.LogStreamResponse.StructuredFieldsEntry
+	(ExporterStatus)(0),                 // 45: jumpstarter.v1.ExporterStatus
+	(*structpb.Value)(nil),              // 46: google.protobuf.Value
+	(LogSource)(0),                      // 47: jumpstarter.v1.LogSource
+	(*timestamppb.Timestamp)(nil),       // 48: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),         // 49: google.protobuf.Duration
+	(*LabelSelector)(nil),               // 50: jumpstarter.v1.LabelSelector
+	(*Condition)(nil),                   // 51: jumpstarter.v1.Condition
+	(*emptypb.Empty)(nil),               // 52: google.protobuf.Empty
 }
 var file_jumpstarter_v1_jumpstarter_proto_depIdxs = []int32{
-	37, // 0: jumpstarter.v1.RegisterRequest.labels:type_name -> jumpstarter.v1.RegisterRequest.LabelsEntry
+	39, // 0: jumpstarter.v1.RegisterRequest.labels:type_name -> jumpstarter.v1.RegisterRequest.LabelsEntry
 	1,  // 1: jumpstarter.v1.RegisterRequest.reports:type_name -> jumpstarter.v1.DriverInstanceReport
-	38, // 2: jumpstarter.v1.DriverInstanceReport.labels:type_name -> jumpstarter.v1.DriverInstanceReport.LabelsEntry
-	39, // 3: jumpstarter.v1.DriverInstanceReport.methods_description:type_name -> jumpstarter.v1.DriverInstanceReport.MethodsDescriptionEntry
-	40, // 4: jumpstarter.v1.StatusResponse.context:type_name -> jumpstarter.v1.StatusResponse.ContextEntry
-	43, // 5: jumpstarter.v1.ReportStatusRequest.status:type_name -> jumpstarter.v1.ExporterStatus
-	41, // 6: jumpstarter.v1.GetReportResponse.labels:type_name -> jumpstarter.v1.GetReportResponse.LabelsEntry
+	40, // 2: jumpstarter.v1.DriverInstanceReport.labels:type_name -> jumpstarter.v1.DriverInstanceReport.LabelsEntry
+	41, // 3: jumpstarter.v1.DriverInstanceReport.methods_description:type_name -> jumpstarter.v1.DriverInstanceReport.MethodsDescriptionEntry
+	42, // 4: jumpstarter.v1.StatusResponse.context:type_name -> jumpstarter.v1.StatusResponse.ContextEntry
+	45, // 5: jumpstarter.v1.ReportStatusRequest.status:type_name -> jumpstarter.v1.ExporterStatus
+	43, // 6: jumpstarter.v1.GetReportResponse.labels:type_name -> jumpstarter.v1.GetReportResponse.LabelsEntry
 	1,  // 7: jumpstarter.v1.GetReportResponse.reports:type_name -> jumpstarter.v1.DriverInstanceReport
 	14, // 8: jumpstarter.v1.GetReportResponse.alternative_endpoints:type_name -> jumpstarter.v1.Endpoint
-	44, // 9: jumpstarter.v1.DriverCallRequest.args:type_name -> google.protobuf.Value
-	44, // 10: jumpstarter.v1.DriverCallResponse.result:type_name -> google.protobuf.Value
-	44, // 11: jumpstarter.v1.StreamingDriverCallRequest.args:type_name -> google.protobuf.Value
-	44, // 12: jumpstarter.v1.StreamingDriverCallResponse.result:type_name -> google.protobuf.Value
-	45, // 13: jumpstarter.v1.LogStreamResponse.source:type_name -> jumpstarter.v1.LogSource
-	46, // 14: jumpstarter.v1.LogStreamResponse.timestamp:type_name -> google.protobuf.Timestamp
-	42, // 15: jumpstarter.v1.LogStreamResponse.structured_fields:type_name -> jumpstarter.v1.LogStreamResponse.StructuredFieldsEntry
-	47, // 16: jumpstarter.v1.GetLeaseResponse.duration:type_name -> google.protobuf.Duration
-	48, // 17: jumpstarter.v1.GetLeaseResponse.selector:type_name -> jumpstarter.v1.LabelSelector
-	46, // 18: jumpstarter.v1.GetLeaseResponse.begin_time:type_name -> google.protobuf.Timestamp
-	46, // 19: jumpstarter.v1.GetLeaseResponse.end_time:type_name -> google.protobuf.Timestamp
-	49, // 20: jumpstarter.v1.GetLeaseResponse.conditions:type_name -> jumpstarter.v1.Condition
-	47, // 21: jumpstarter.v1.RequestLeaseRequest.duration:type_name -> google.protobuf.Duration
-	48, // 22: jumpstarter.v1.RequestLeaseRequest.selector:type_name -> jumpstarter.v1.LabelSelector
-	43, // 23: jumpstarter.v1.GetStatusResponse.status:type_name -> jumpstarter.v1.ExporterStatus
-	43, // 24: jumpstarter.v1.GetStatusResponse.previous_status:type_name -> jumpstarter.v1.ExporterStatus
+	46, // 9: jumpstarter.v1.DriverCallRequest.args:type_name -> google.protobuf.Value
+	46, // 10: jumpstarter.v1.DriverCallResponse.result:type_name -> google.protobuf.Value
+	46, // 11: jumpstarter.v1.StreamingDriverCallRequest.args:type_name -> google.protobuf.Value
+	46, // 12: jumpstarter.v1.StreamingDriverCallResponse.result:type_name -> google.protobuf.Value
+	47, // 13: jumpstarter.v1.LogStreamResponse.source:type_name -> jumpstarter.v1.LogSource
+	48, // 14: jumpstarter.v1.LogStreamResponse.timestamp:type_name -> google.protobuf.Timestamp
+	44, // 15: jumpstarter.v1.LogStreamResponse.structured_fields:type_name -> jumpstarter.v1.LogStreamResponse.StructuredFieldsEntry
+	49, // 16: jumpstarter.v1.GetLeaseResponse.duration:type_name -> google.protobuf.Duration
+	50, // 17: jumpstarter.v1.GetLeaseResponse.selector:type_name -> jumpstarter.v1.LabelSelector
+	48, // 18: jumpstarter.v1.GetLeaseResponse.begin_time:type_name -> google.protobuf.Timestamp
+	48, // 19: jumpstarter.v1.GetLeaseResponse.end_time:type_name -> google.protobuf.Timestamp
+	51, // 20: jumpstarter.v1.GetLeaseResponse.conditions:type_name -> jumpstarter.v1.Condition
+	49, // 21: jumpstarter.v1.RequestLeaseRequest.duration:type_name -> google.protobuf.Duration
+	50, // 22: jumpstarter.v1.RequestLeaseRequest.selector:type_name -> jumpstarter.v1.LabelSelector
+	45, // 23: jumpstarter.v1.GetStatusResponse.status:type_name -> jumpstarter.v1.ExporterStatus
+	45, // 24: jumpstarter.v1.GetStatusResponse.previous_status:type_name -> jumpstarter.v1.ExporterStatus
 	36, // 25: jumpstarter.v1.GetServiceEndpointsResponse.telemetry_endpoints:type_name -> jumpstarter.v1.TelemetryEndpoint
-	0,  // 26: jumpstarter.v1.ControllerService.Register:input_type -> jumpstarter.v1.RegisterRequest
-	3,  // 27: jumpstarter.v1.ControllerService.Unregister:input_type -> jumpstarter.v1.UnregisterRequest
-	11, // 28: jumpstarter.v1.ControllerService.ReportStatus:input_type -> jumpstarter.v1.ReportStatusRequest
-	5,  // 29: jumpstarter.v1.ControllerService.Listen:input_type -> jumpstarter.v1.ListenRequest
-	7,  // 30: jumpstarter.v1.ControllerService.Status:input_type -> jumpstarter.v1.StatusRequest
-	9,  // 31: jumpstarter.v1.ControllerService.Dial:input_type -> jumpstarter.v1.DialRequest
-	22, // 32: jumpstarter.v1.ControllerService.GetLease:input_type -> jumpstarter.v1.GetLeaseRequest
-	24, // 33: jumpstarter.v1.ControllerService.RequestLease:input_type -> jumpstarter.v1.RequestLeaseRequest
-	26, // 34: jumpstarter.v1.ControllerService.ReleaseLease:input_type -> jumpstarter.v1.ReleaseLeaseRequest
-	28, // 35: jumpstarter.v1.ControllerService.ListLeases:input_type -> jumpstarter.v1.ListLeasesRequest
-	34, // 36: jumpstarter.v1.ControllerService.GetServiceEndpoints:input_type -> jumpstarter.v1.GetServiceEndpointsRequest
-	50, // 37: jumpstarter.v1.ExporterService.GetReport:input_type -> google.protobuf.Empty
-	15, // 38: jumpstarter.v1.ExporterService.DriverCall:input_type -> jumpstarter.v1.DriverCallRequest
-	17, // 39: jumpstarter.v1.ExporterService.StreamingDriverCall:input_type -> jumpstarter.v1.StreamingDriverCallRequest
-	50, // 40: jumpstarter.v1.ExporterService.LogStream:input_type -> google.protobuf.Empty
-	20, // 41: jumpstarter.v1.ExporterService.Reset:input_type -> jumpstarter.v1.ResetRequest
-	30, // 42: jumpstarter.v1.ExporterService.GetStatus:input_type -> jumpstarter.v1.GetStatusRequest
-	32, // 43: jumpstarter.v1.ExporterService.EndSession:input_type -> jumpstarter.v1.EndSessionRequest
-	2,  // 44: jumpstarter.v1.ControllerService.Register:output_type -> jumpstarter.v1.RegisterResponse
-	4,  // 45: jumpstarter.v1.ControllerService.Unregister:output_type -> jumpstarter.v1.UnregisterResponse
-	12, // 46: jumpstarter.v1.ControllerService.ReportStatus:output_type -> jumpstarter.v1.ReportStatusResponse
-	6,  // 47: jumpstarter.v1.ControllerService.Listen:output_type -> jumpstarter.v1.ListenResponse
-	8,  // 48: jumpstarter.v1.ControllerService.Status:output_type -> jumpstarter.v1.StatusResponse
-	10, // 49: jumpstarter.v1.ControllerService.Dial:output_type -> jumpstarter.v1.DialResponse
-	23, // 50: jumpstarter.v1.ControllerService.GetLease:output_type -> jumpstarter.v1.GetLeaseResponse
-	25, // 51: jumpstarter.v1.ControllerService.RequestLease:output_type -> jumpstarter.v1.RequestLeaseResponse
-	27, // 52: jumpstarter.v1.ControllerService.ReleaseLease:output_type -> jumpstarter.v1.ReleaseLeaseResponse
-	29, // 53: jumpstarter.v1.ControllerService.ListLeases:output_type -> jumpstarter.v1.ListLeasesResponse
-	35, // 54: jumpstarter.v1.ControllerService.GetServiceEndpoints:output_type -> jumpstarter.v1.GetServiceEndpointsResponse
-	13, // 55: jumpstarter.v1.ExporterService.GetReport:output_type -> jumpstarter.v1.GetReportResponse
-	16, // 56: jumpstarter.v1.ExporterService.DriverCall:output_type -> jumpstarter.v1.DriverCallResponse
-	18, // 57: jumpstarter.v1.ExporterService.StreamingDriverCall:output_type -> jumpstarter.v1.StreamingDriverCallResponse
-	19, // 58: jumpstarter.v1.ExporterService.LogStream:output_type -> jumpstarter.v1.LogStreamResponse
-	21, // 59: jumpstarter.v1.ExporterService.Reset:output_type -> jumpstarter.v1.ResetResponse
-	31, // 60: jumpstarter.v1.ExporterService.GetStatus:output_type -> jumpstarter.v1.GetStatusResponse
-	33, // 61: jumpstarter.v1.ExporterService.EndSession:output_type -> jumpstarter.v1.EndSessionResponse
-	44, // [44:62] is the sub-list for method output_type
-	26, // [26:44] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	48, // 26: jumpstarter.v1.RotateTokenResponse.expiry:type_name -> google.protobuf.Timestamp
+	0,  // 27: jumpstarter.v1.ControllerService.Register:input_type -> jumpstarter.v1.RegisterRequest
+	3,  // 28: jumpstarter.v1.ControllerService.Unregister:input_type -> jumpstarter.v1.UnregisterRequest
+	11, // 29: jumpstarter.v1.ControllerService.ReportStatus:input_type -> jumpstarter.v1.ReportStatusRequest
+	5,  // 30: jumpstarter.v1.ControllerService.Listen:input_type -> jumpstarter.v1.ListenRequest
+	7,  // 31: jumpstarter.v1.ControllerService.Status:input_type -> jumpstarter.v1.StatusRequest
+	9,  // 32: jumpstarter.v1.ControllerService.Dial:input_type -> jumpstarter.v1.DialRequest
+	22, // 33: jumpstarter.v1.ControllerService.GetLease:input_type -> jumpstarter.v1.GetLeaseRequest
+	24, // 34: jumpstarter.v1.ControllerService.RequestLease:input_type -> jumpstarter.v1.RequestLeaseRequest
+	26, // 35: jumpstarter.v1.ControllerService.ReleaseLease:input_type -> jumpstarter.v1.ReleaseLeaseRequest
+	28, // 36: jumpstarter.v1.ControllerService.ListLeases:input_type -> jumpstarter.v1.ListLeasesRequest
+	34, // 37: jumpstarter.v1.ControllerService.GetServiceEndpoints:input_type -> jumpstarter.v1.GetServiceEndpointsRequest
+	37, // 38: jumpstarter.v1.ControllerService.RotateToken:input_type -> jumpstarter.v1.RotateTokenRequest
+	52, // 39: jumpstarter.v1.ExporterService.GetReport:input_type -> google.protobuf.Empty
+	15, // 40: jumpstarter.v1.ExporterService.DriverCall:input_type -> jumpstarter.v1.DriverCallRequest
+	17, // 41: jumpstarter.v1.ExporterService.StreamingDriverCall:input_type -> jumpstarter.v1.StreamingDriverCallRequest
+	52, // 42: jumpstarter.v1.ExporterService.LogStream:input_type -> google.protobuf.Empty
+	20, // 43: jumpstarter.v1.ExporterService.Reset:input_type -> jumpstarter.v1.ResetRequest
+	30, // 44: jumpstarter.v1.ExporterService.GetStatus:input_type -> jumpstarter.v1.GetStatusRequest
+	32, // 45: jumpstarter.v1.ExporterService.EndSession:input_type -> jumpstarter.v1.EndSessionRequest
+	2,  // 46: jumpstarter.v1.ControllerService.Register:output_type -> jumpstarter.v1.RegisterResponse
+	4,  // 47: jumpstarter.v1.ControllerService.Unregister:output_type -> jumpstarter.v1.UnregisterResponse
+	12, // 48: jumpstarter.v1.ControllerService.ReportStatus:output_type -> jumpstarter.v1.ReportStatusResponse
+	6,  // 49: jumpstarter.v1.ControllerService.Listen:output_type -> jumpstarter.v1.ListenResponse
+	8,  // 50: jumpstarter.v1.ControllerService.Status:output_type -> jumpstarter.v1.StatusResponse
+	10, // 51: jumpstarter.v1.ControllerService.Dial:output_type -> jumpstarter.v1.DialResponse
+	23, // 52: jumpstarter.v1.ControllerService.GetLease:output_type -> jumpstarter.v1.GetLeaseResponse
+	25, // 53: jumpstarter.v1.ControllerService.RequestLease:output_type -> jumpstarter.v1.RequestLeaseResponse
+	27, // 54: jumpstarter.v1.ControllerService.ReleaseLease:output_type -> jumpstarter.v1.ReleaseLeaseResponse
+	29, // 55: jumpstarter.v1.ControllerService.ListLeases:output_type -> jumpstarter.v1.ListLeasesResponse
+	35, // 56: jumpstarter.v1.ControllerService.GetServiceEndpoints:output_type -> jumpstarter.v1.GetServiceEndpointsResponse
+	38, // 57: jumpstarter.v1.ControllerService.RotateToken:output_type -> jumpstarter.v1.RotateTokenResponse
+	13, // 58: jumpstarter.v1.ExporterService.GetReport:output_type -> jumpstarter.v1.GetReportResponse
+	16, // 59: jumpstarter.v1.ExporterService.DriverCall:output_type -> jumpstarter.v1.DriverCallResponse
+	18, // 60: jumpstarter.v1.ExporterService.StreamingDriverCall:output_type -> jumpstarter.v1.StreamingDriverCallResponse
+	19, // 61: jumpstarter.v1.ExporterService.LogStream:output_type -> jumpstarter.v1.LogStreamResponse
+	21, // 62: jumpstarter.v1.ExporterService.Reset:output_type -> jumpstarter.v1.ResetResponse
+	31, // 63: jumpstarter.v1.ExporterService.GetStatus:output_type -> jumpstarter.v1.GetStatusResponse
+	33, // 64: jumpstarter.v1.ExporterService.EndSession:output_type -> jumpstarter.v1.EndSessionResponse
+	46, // [46:65] is the sub-list for method output_type
+	27, // [27:46] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_jumpstarter_v1_jumpstarter_proto_init() }
@@ -2308,7 +2408,7 @@ func file_jumpstarter_v1_jumpstarter_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_jumpstarter_v1_jumpstarter_proto_rawDesc), len(file_jumpstarter_v1_jumpstarter_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   43,
+			NumMessages:   45,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -202,7 +202,23 @@ _ControllerServiceGetServiceEndpointsType = typing_extensions.TypeVar(
     ],
 )
 
-class ControllerServiceStub(typing.Generic[_ControllerServiceRegisterType, _ControllerServiceUnregisterType, _ControllerServiceReportStatusType, _ControllerServiceListenType, _ControllerServiceStatusType, _ControllerServiceDialType, _ControllerServiceGetLeaseType, _ControllerServiceRequestLeaseType, _ControllerServiceReleaseLeaseType, _ControllerServiceListLeasesType, _ControllerServiceGetServiceEndpointsType]):
+_ControllerServiceRotateTokenType = typing_extensions.TypeVar(
+    '_ControllerServiceRotateTokenType',
+    grpc.UnaryUnaryMultiCallable[
+        jumpstarter.v1.jumpstarter_pb2.RotateTokenRequest,
+        jumpstarter.v1.jumpstarter_pb2.RotateTokenResponse,
+    ],
+    grpc.aio.UnaryUnaryMultiCallable[
+        jumpstarter.v1.jumpstarter_pb2.RotateTokenRequest,
+        jumpstarter.v1.jumpstarter_pb2.RotateTokenResponse,
+    ],
+    default=grpc.UnaryUnaryMultiCallable[
+        jumpstarter.v1.jumpstarter_pb2.RotateTokenRequest,
+        jumpstarter.v1.jumpstarter_pb2.RotateTokenResponse,
+    ],
+)
+
+class ControllerServiceStub(typing.Generic[_ControllerServiceRegisterType, _ControllerServiceUnregisterType, _ControllerServiceReportStatusType, _ControllerServiceListenType, _ControllerServiceStatusType, _ControllerServiceDialType, _ControllerServiceGetLeaseType, _ControllerServiceRequestLeaseType, _ControllerServiceReleaseLeaseType, _ControllerServiceListLeasesType, _ControllerServiceGetServiceEndpointsType, _ControllerServiceRotateTokenType]):
     """A service where an exporter can connect to make itself available."""
 
     @typing.overload
@@ -250,6 +266,10 @@ class ControllerServiceStub(typing.Generic[_ControllerServiceRegisterType, _Cont
         grpc.UnaryUnaryMultiCallable[
             jumpstarter.v1.jumpstarter_pb2.GetServiceEndpointsRequest,
             jumpstarter.v1.jumpstarter_pb2.GetServiceEndpointsResponse,
+        ],
+        grpc.UnaryUnaryMultiCallable[
+            jumpstarter.v1.jumpstarter_pb2.RotateTokenRequest,
+            jumpstarter.v1.jumpstarter_pb2.RotateTokenResponse,
         ],
     ], channel: grpc.Channel) -> None: ...
 
@@ -299,6 +319,10 @@ class ControllerServiceStub(typing.Generic[_ControllerServiceRegisterType, _Cont
             jumpstarter.v1.jumpstarter_pb2.GetServiceEndpointsRequest,
             jumpstarter.v1.jumpstarter_pb2.GetServiceEndpointsResponse,
         ],
+        grpc.aio.UnaryUnaryMultiCallable[
+            jumpstarter.v1.jumpstarter_pb2.RotateTokenRequest,
+            jumpstarter.v1.jumpstarter_pb2.RotateTokenResponse,
+        ],
     ], channel: grpc.aio.Channel) -> None: ...
 
     Register: _ControllerServiceRegisterType
@@ -345,6 +369,9 @@ class ControllerServiceStub(typing.Generic[_ControllerServiceRegisterType, _Cont
     Older controllers return UNIMPLEMENTED; callers must treat that as an empty list.
     """
 
+    RotateToken: _ControllerServiceRotateTokenType
+    """Rotate the authentication token for the exporter."""
+
 ControllerServiceAsyncStub: typing_extensions.TypeAlias = ControllerServiceStub[
     grpc.aio.UnaryUnaryMultiCallable[
         jumpstarter.v1.jumpstarter_pb2.RegisterRequest,
@@ -389,6 +416,10 @@ ControllerServiceAsyncStub: typing_extensions.TypeAlias = ControllerServiceStub[
     grpc.aio.UnaryUnaryMultiCallable[
         jumpstarter.v1.jumpstarter_pb2.GetServiceEndpointsRequest,
         jumpstarter.v1.jumpstarter_pb2.GetServiceEndpointsResponse,
+    ],
+    grpc.aio.UnaryUnaryMultiCallable[
+        jumpstarter.v1.jumpstarter_pb2.RotateTokenRequest,
+        jumpstarter.v1.jumpstarter_pb2.RotateTokenResponse,
     ],
 ]
 
@@ -493,6 +524,14 @@ class ControllerServiceServicer(metaclass=abc.ABCMeta):
         Returns an empty list when no optional services are deployed.
         Older controllers return UNIMPLEMENTED; callers must treat that as an empty list.
         """
+
+    @abc.abstractmethod
+    def RotateToken(
+        self,
+        request: jumpstarter.v1.jumpstarter_pb2.RotateTokenRequest,
+        context: _ServicerContext,
+    ) -> typing.Union[jumpstarter.v1.jumpstarter_pb2.RotateTokenResponse, collections.abc.Awaitable[jumpstarter.v1.jumpstarter_pb2.RotateTokenResponse]]:
+        """Rotate the authentication token for the exporter."""
 
 def add_ControllerServiceServicer_to_server(servicer: ControllerServiceServicer, server: typing.Union[grpc.Server, grpc.aio.Server]) -> None: ...
 

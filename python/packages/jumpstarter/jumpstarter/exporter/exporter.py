@@ -1,3 +1,4 @@
+import inspect
 import logging
 import math
 import os
@@ -36,6 +37,11 @@ from jumpstarter.exporter.hooks import HookExecutor
 from jumpstarter.exporter.lease_context import LeaseContext
 from jumpstarter.exporter.session import Session
 from jumpstarter.exporter.telemetry import TelemetryLogHandler
+from jumpstarter.exporter.token_refresh import (
+    DEFAULT_TOKEN_REFRESH_FRACTION,
+    DEFAULT_TOKEN_REFRESH_LEAD_TIME,
+    calculate_token_refresh_sleep,
+)
 from jumpstarter.logging import clear_log_context, set_log_context
 
 if TYPE_CHECKING:
@@ -60,12 +66,14 @@ _RPC_TIMEOUT = 30
 _LEASE_FINISHED_WATCHDOG = 30.0
 
 # Status codes indicating old controller without exporter auth on ReleaseLease
-_RELEASE_LEASE_UNSUPPORTED_CODES = frozenset({
-    grpc.StatusCode.PERMISSION_DENIED,
-    grpc.StatusCode.INVALID_ARGUMENT,
-    grpc.StatusCode.UNAUTHENTICATED,
-    grpc.StatusCode.UNIMPLEMENTED,
-})
+_RELEASE_LEASE_UNSUPPORTED_CODES = frozenset(
+    {
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.INVALID_ARGUMENT,
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.UNIMPLEMENTED,
+    }
+)
 
 _SEVERITY_MAP = {
     "debug": logging.DEBUG,
@@ -83,6 +91,7 @@ def _severity_to_level(severity: str) -> int:
     if level is None:
         if key:
             import structlog
+
             structlog.get_logger(__name__).warning(
                 "Unrecognized min_severity value, defaulting to info",
                 value=severity,
@@ -259,6 +268,18 @@ class Exporter(AsyncContextManagerMixin, Metadata):
     Set from ExporterConfigV1Alpha1.token so PushLogs calls can include
     the exporter's JWT as an Authorization header.
     """
+
+    on_token_rotated: Callable[[str], Awaitable[None] | None] | None = field(default=None)
+    """Optional callback invoked when the authentication token is rotated.
+
+    Passed the new token string. Can be async or sync.
+    """
+
+    token_refresh_lead_time: float = DEFAULT_TOKEN_REFRESH_LEAD_TIME
+    """Maximum lead time before expiry to attempt token refresh (default: 7 days)."""
+
+    token_refresh_fraction: float = DEFAULT_TOKEN_REFRESH_FRACTION
+    """Fraction of total token lifetime at which to trigger refresh (default: 0.2)."""
 
     # Internal State Fields
 
@@ -585,9 +606,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
         logger.info("Connecting to telemetry service at %s (min_severity=%s)", ep.endpoint, ep.min_severity)
 
         grpc_insecure = (
-            self.tls.insecure
-            or os.getenv(JMP_GRPC_INSECURE) == "1"
-            or os.getenv(JUMPSTARTER_GRPC_INSECURE) == "1"
+            self.tls.insecure or os.getenv(JMP_GRPC_INSECURE) == "1" or os.getenv(JUMPSTARTER_GRPC_INSECURE) == "1"
         )
 
         if ep.certificate:
@@ -601,15 +620,102 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             self._telemetry_channel = grpc.aio.insecure_channel(ep.endpoint)
         else:
             # Production: TLS with system CA pool.
-            self._telemetry_channel = grpc.aio.secure_channel(
-                ep.endpoint, grpc.ssl_channel_credentials()
-            )
+            self._telemetry_channel = grpc.aio.secure_channel(ep.endpoint, grpc.ssl_channel_credentials())
         stub = telemetry_pb2_grpc.TelemetryServiceStub(self._telemetry_channel)
         handler = TelemetryLogHandler(stub, namespace=getattr(self, "namespace", "") or "", token=self.token)
         handler.setLevel(_severity_to_level(ep.min_severity))
         logging.getLogger().addHandler(handler)
         self._telemetry_handler = handler
         logger.info("Telemetry log handler attached")
+
+    async def rotate_token(self) -> str:
+        """Request a newly signed authentication token from the controller.
+
+        Updates self.token, updates the telemetry handler if attached, and invokes
+        the on_token_rotated callback if configured.
+
+        Returns:
+            The newly rotated token string.
+        """
+        async with self._controller_stub() as controller:
+            response: jumpstarter_pb2.RotateTokenResponse = await controller.RotateToken(
+                jumpstarter_pb2.RotateTokenRequest(),
+                timeout=_RPC_TIMEOUT,
+            )
+
+        new_token = response.token
+        self.token = new_token
+
+        if self._telemetry_handler is not None:
+            self._telemetry_handler.token = new_token
+
+        if self.on_token_rotated is not None:
+            try:
+                res = self.on_token_rotated(new_token)
+                if inspect.isawaitable(res):
+                    await res
+            except Exception as e:
+                logger.error("Error in on_token_rotated callback: %s", e, exc_info=True)
+
+        return new_token
+
+    async def _token_refresh_loop(self) -> None:
+        """Monitor token expiration and request a new token when it is about to expire."""
+        if self._standalone or not self.token:
+            return
+
+        while True:
+            sleep_duration = calculate_token_refresh_sleep(
+                self.token,
+                lead_time=self.token_refresh_lead_time,
+                fraction=self.token_refresh_fraction,
+            )
+            if sleep_duration is None:
+                logger.debug("Token does not have an expiry claim; automatic refresh disabled")
+                return
+
+            if sleep_duration > 0:
+                logger.debug("Token refresh scheduled in %.1f seconds", sleep_duration)
+                await sleep(sleep_duration)
+
+            # Token is about to expire (or already expired) - request a new token with retries
+            attempt = 0
+            while True:
+                try:
+                    logger.info("Token is about to expire; requesting new token from controller")
+                    await self.rotate_token()
+                    logger.info("Successfully refreshed exporter authentication token")
+                    break
+                except grpc.aio.AioRpcError as e:
+                    if e.code() == grpc.StatusCode.UNIMPLEMENTED:
+                        logger.warning(
+                            "Controller does not support token rotation (UNIMPLEMENTED); disabling automatic refresh"
+                        )
+                        return
+                    elif e.code() in (grpc.StatusCode.UNAUTHENTICATED, grpc.StatusCode.PERMISSION_DENIED):
+                        logger.error("Failed to rotate token (%s): %s", e.code(), e.details())
+                        return
+                    else:
+                        attempt += 1
+                        backoff = min(_RPC_BACKOFF_BASE * (2 ** min(attempt - 1, 5)), _RPC_BACKOFF_CAP)
+                        logger.warning(
+                            "Transient failure rotating token (%s: %s); retrying in %.1fs (attempt %d)",
+                            e.code(),
+                            e.details(),
+                            backoff,
+                            attempt,
+                        )
+                        await sleep(backoff)
+                except Exception as e:
+                    attempt += 1
+                    backoff = min(_RPC_BACKOFF_BASE * (2 ** min(attempt - 1, 5)), _RPC_BACKOFF_CAP)
+                    logger.warning(
+                        "Unexpected failure rotating token (%s); retrying in %.1fs (attempt %d)",
+                        e,
+                        backoff,
+                        attempt,
+                    )
+                    await sleep(backoff)
 
     async def _retry_rpc(
         self,
@@ -1005,24 +1111,21 @@ class Exporter(AsyncContextManagerMixin, Metadata):
             # Use the configured hook timeout (+ margin) when available so we
             # never interrupt a legitimately-running beforeLease hook.
             safety_timeout = 15  # generous default for no-hook / unknown cases
-            if (
-                self.hook_executor
-                and self.hook_executor.config.before_lease
-            ):
+            if self.hook_executor and self.hook_executor.config.before_lease:
                 safety_timeout = self.hook_executor.config.before_lease.timeout + 30
             with move_on_after(safety_timeout) as timeout_scope:
                 await lease_scope.before_lease_hook.wait()
             if timeout_scope.cancelled_caught:
-                logger.warning(
-                    "Timed out waiting for before_lease_hook; forcing it set to avoid deadlock"
-                )
+                logger.warning("Timed out waiting for before_lease_hook; forcing it set to avoid deadlock")
                 lease_scope.before_lease_hook.set()
 
             if not lease_scope.after_lease_hook_started.is_set():
                 lease_scope.after_lease_hook_started.set()
-                if (self.hook_executor
-                        and (lease_scope.has_client() or self._standalone)
-                        and not lease_scope.skip_after_lease_hook):
+                if (
+                    self.hook_executor
+                    and (lease_scope.has_client() or self._standalone)
+                    and not lease_scope.skip_after_lease_hook
+                ):
                     logger.info("Running afterLease hook on session close")
                     await self.hook_executor.run_after_lease_hook(
                         lease_scope,
@@ -1037,10 +1140,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                         else:
                             logger.info("Skipping afterLease hook: beforeLease hook failed")
                     if not self._stop_requested:
-                        logger.debug(
-                            "No afterLease hook or no client on session close,"
-                            " transitioning to AVAILABLE"
-                        )
+                        logger.debug("No afterLease hook or no client on session close, transitioning to AVAILABLE")
                         await self._report_status(ExporterStatus.AVAILABLE, "Available for new lease")
                     else:
                         logger.debug("Exporter is shutting down, skipping AVAILABLE status report")
@@ -1304,6 +1404,7 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                 self._status_stream_factory(),
                 status_tx,
             )
+            tg.start_soon(self._token_refresh_loop)
             # One loop, one writer of _lease_context. Status ticks come from the
             # controller RPC; LeaseFinished comes from handle_lease when it has
             # torn a lease down. Both are handled here, sequentially.
@@ -1559,7 +1660,9 @@ class Exporter(AsyncContextManagerMixin, Metadata):
                 lease_scope.hook_socket_path = hook_path_str
 
                 async with session.serve_tcp_and_unix_async(
-                    host, port, hook_path_str,
+                    host,
+                    port,
+                    hook_path_str,
                     tls_credentials=tls_credentials,
                     interceptors=interceptors,
                 ):

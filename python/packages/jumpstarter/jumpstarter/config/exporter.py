@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import tempfile
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -21,6 +22,8 @@ from jumpstarter.common.importlib import import_class
 
 if TYPE_CHECKING:
     from jumpstarter.driver import Driver
+
+logger = logging.getLogger(__name__)
 
 
 class HookInstanceConfigV1Alpha1(BaseModel):
@@ -288,7 +291,9 @@ class ExporterConfigV1Alpha1(BaseModel):
             with os.fdopen(temp_fd, "w") as f:
                 yaml.safe_dump(
                     config.model_dump(
-                        mode="json", by_alias=True, exclude=cls._EXCLUDE_FROM_YAML,
+                        mode="json",
+                        by_alias=True,
+                        exclude=cls._EXCLUDE_FROM_YAML,
                     ),
                     f,
                     sort_keys=False,
@@ -378,6 +383,15 @@ class ExporterConfigV1Alpha1(BaseModel):
                 config=self.hooks,
             )
 
+        async def on_token_rotated(new_token: str):
+            self.token = new_token
+            if self.path is not None:
+                try:
+                    self.save(self, path=str(self.path))
+                    logger.info("Saved rotated exporter token to %s", self.path)
+                except OSError as e:
+                    logger.warning("Could not save rotated token to %s: %s", self.path, e)
+
         exporter = None
         entered = False
         try:
@@ -395,6 +409,7 @@ class ExporterConfigV1Alpha1(BaseModel):
                 hook_executor=hook_executor,
                 motd=self.motd,
                 exit_on_lease_end=self.exit_on_lease_end,
+                on_token_rotated=on_token_rotated,
             )
             # Initialize the exporter (registration, etc.)
             await exporter.__aenter__()
@@ -405,6 +420,11 @@ class ExporterConfigV1Alpha1(BaseModel):
             if exporter and entered:
                 with CancelScope(shield=True):
                     await exporter.__aexit__(None, None, None)
+
+    async def rotate_token(self) -> str:
+        """Rotate the exporter authentication token with the controller."""
+        async with self.create_exporter() as exporter:
+            return await exporter.rotate_token()
 
     async def serve(self):
         async with self.create_exporter() as exporter:

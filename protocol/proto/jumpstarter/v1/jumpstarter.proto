@@ -49,6 +49,9 @@ service ControllerService {
   // Returns an empty list when no optional services are deployed.
   // Older controllers return UNIMPLEMENTED; callers must treat that as an empty list.
   rpc GetServiceEndpoints(GetServiceEndpointsRequest) returns (GetServiceEndpointsResponse);
+
+  // Rotate the authentication token for the exporter.
+  rpc RotateToken(RotateTokenRequest) returns (RotateTokenResponse);
 }
 
 // Registration request sent by an exporter to the controller.
@@ -280,4 +283,13 @@ message TelemetryEndpoint {
   string endpoint = 1;      // gRPC address (host:port).
   string certificate = 2;   // Optional CA certificate PEM for TLS verification.
   string min_severity = 3;  // Minimum log severity to forward (e.g. "info", "warning").
+}
+
+// Request to rotate the authentication token for an exporter.
+message RotateTokenRequest {}
+
+// Response containing the newly rotated token.
+message RotateTokenResponse {
+  string token = 1; // The new authentication token.
+  google.protobuf.Timestamp expiry = 2; // The expiration time of the new token.
 }

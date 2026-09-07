@@ -74,8 +74,11 @@ func (r *ExporterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	prevOnline := meta.IsStatusConditionTrue(exporter.Status.Conditions, string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline))
 	prevRegistered := meta.IsStatusConditionTrue(exporter.Status.Conditions, string(jumpstarterdevv1alpha1.ExporterConditionTypeRegistered))
+	prevCredential := exporter.Status.Credential
+	prevTokenExpiring := meta.IsStatusConditionTrue(exporter.Status.Conditions, string(jumpstarterdevv1alpha1.ExporterConditionTypeTokenExpiring))
 
-	if err := r.reconcileStatusCredential(ctx, &exporter); err != nil {
+	tokenExpiry, err := r.reconcileStatusCredential(ctx, &exporter)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -92,6 +95,14 @@ func (r *ExporterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
+	reconcileTokenExpiry(
+		&exporter.Status.Conditions,
+		&exporter.Status.TokenExpiresAt,
+		tokenExpiry,
+		exporter.Generation,
+		string(jumpstarterdevv1alpha1.ExporterConditionTypeTokenExpiring),
+	)
+
 	newOnline := meta.IsStatusConditionTrue(exporter.Status.Conditions, string(jumpstarterdevv1alpha1.ExporterConditionTypeOnline))
 	newRegistered := meta.IsStatusConditionTrue(exporter.Status.Conditions, string(jumpstarterdevv1alpha1.ExporterConditionTypeRegistered))
 
@@ -100,6 +111,17 @@ func (r *ExporterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Emit only after status patch succeeds.
+	if prevCredential == nil && exporter.Status.Credential != nil {
+		r.emitEventf(&exporter, corev1.EventTypeNormal, "CredentialCreated",
+			"Credential secret created for exporter: secret=%s", exporter.Status.Credential.Name)
+	}
+
+	newTokenExpiring := meta.IsStatusConditionTrue(exporter.Status.Conditions, string(jumpstarterdevv1alpha1.ExporterConditionTypeTokenExpiring))
+	if !prevTokenExpiring && newTokenExpiring {
+		r.emitEventf(&exporter, corev1.EventTypeWarning, "TokenExpiringSoon",
+			"Token for exporter %s is expiring soon: expires=%s", exporter.Name, tokenExpiry.UTC().Format(time.RFC3339))
+	}
+
 	if !prevRegistered && newRegistered {
 		r.emitEventf(&exporter, corev1.EventTypeNormal, "ExporterRegistered",
 			"Exporter registered its capabilities: deviceCount=%d", len(exporter.Status.Devices))
@@ -125,24 +147,28 @@ func (r *ExporterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
+	if result.RequeueAfter == 0 || result.RequeueAfter > tokenExpiryRequeueInterval {
+		result.RequeueAfter = tokenExpiryRequeueInterval
+	}
+
 	return result, nil
 }
 
 func (r *ExporterReconciler) reconcileStatusCredential(
 	ctx context.Context,
 	exporter *jumpstarterdevv1alpha1.Exporter,
-) error {
-	secret, _, err := ensureSecret(ctx, client.ObjectKey{
+) (time.Time, error) {
+	secret, expiry, err := ensureSecret(ctx, client.ObjectKey{
 		Name:      exporter.Name + "-exporter",
 		Namespace: exporter.Namespace,
 	}, r.Client, r.Scheme, r.Signer, exporter.InternalSubject(), exporter)
 	if err != nil {
-		return fmt.Errorf("reconcileStatusCredential: failed to prepare credential for exporter: %w", err)
+		return time.Time{}, fmt.Errorf("reconcileStatusCredential: failed to prepare credential for exporter: %w", err)
 	}
 	exporter.Status.Credential = &corev1.LocalObjectReference{
 		Name: secret.Name,
 	}
-	return nil
+	return expiry, nil
 }
 
 func (r *ExporterReconciler) reconcileStatusLeaseRef(

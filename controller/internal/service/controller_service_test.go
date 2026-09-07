@@ -32,15 +32,18 @@ import (
 	jumpstarterdevv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/v1alpha1"
 	"github.com/jumpstarter-dev/jumpstarter/controller/internal/config"
 	jlog "github.com/jumpstarter-dev/jumpstarter/controller/internal/log"
+	"github.com/jumpstarter-dev/jumpstarter/controller/internal/oidc"
 	pb "github.com/jumpstarter-dev/jumpstarter/controller/internal/protocol/jumpstarter/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	grpcpeer "google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
@@ -2380,6 +2383,119 @@ func TestStatusResponseIncludesLeaseContext(t *testing.T) {
 
 		if response.Context != nil {
 			t.Fatalf("expected nil context when not leased, got %v", response.Context)
+		}
+	})
+}
+
+func TestControllerServiceRotateToken(t *testing.T) {
+	scheme := k8sruntime.NewScheme()
+	if err := jumpstarterdevv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add jumpstarter scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 scheme: %v", err)
+	}
+
+	signer, err := oidc.NewSignerFromSeed([]byte{}, "https://example.com", "dummy")
+	if err != nil {
+		t.Fatalf("failed to create signer: %v", err)
+	}
+
+	t.Run("successful rotation", func(t *testing.T) {
+		exporter := &jumpstarterdevv1alpha1.Exporter{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-exporter", Namespace: "default"},
+		}
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-exporter-exporter",
+				Namespace: "default",
+			},
+			Data: map[string][]byte{
+				"token": []byte("old-token"),
+			},
+		}
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(exporter, secret).Build()
+
+		svc := &ControllerService{
+			Client: fakeClient,
+			Authn:  &passingAuthenticator{userName: "test-user"},
+			Authz:  passingAuthorizer{},
+			Attr:   &exporterAttributesGetter{namespace: "default", name: "test-exporter"},
+			Signer: signer,
+		}
+
+		resp, err := svc.RotateToken(context.Background(), &pb.RotateTokenRequest{})
+		if err != nil {
+			t.Fatalf("RotateToken failed: %v", err)
+		}
+		if resp.Token == "" {
+			t.Fatal("expected non-empty token")
+		}
+		if resp.Token == "old-token" {
+			t.Fatal("expected token to be different from old-token")
+		}
+		if resp.Expiry == nil {
+			t.Fatal("expected expiry timestamp")
+		}
+
+		var updatedSecret corev1.Secret
+		if err := fakeClient.Get(context.Background(), types.NamespacedName{
+			Namespace: "default",
+			Name:      "test-exporter-exporter",
+		}, &updatedSecret); err != nil {
+			t.Fatalf("failed to get updated secret: %v", err)
+		}
+		if string(updatedSecret.Data["token"]) != resp.Token {
+			t.Fatalf("expected secret token %q, got %q", resp.Token, string(updatedSecret.Data["token"]))
+		}
+	})
+
+	t.Run("missing signer returns failed precondition", func(t *testing.T) {
+		exporter := &jumpstarterdevv1alpha1.Exporter{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-exporter", Namespace: "default"},
+		}
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-exporter-exporter", Namespace: "default"},
+		}
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(exporter, secret).Build()
+
+		svc := &ControllerService{
+			Client: fakeClient,
+			Authn:  &passingAuthenticator{userName: "test-user"},
+			Authz:  passingAuthorizer{},
+			Attr:   &exporterAttributesGetter{namespace: "default", name: "test-exporter"},
+			Signer: nil,
+		}
+
+		_, err := svc.RotateToken(context.Background(), &pb.RotateTokenRequest{})
+		if err == nil {
+			t.Fatal("expected error with nil signer")
+		}
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("expected FailedPrecondition, got %v", err)
+		}
+	})
+
+	t.Run("missing secret returns internal error", func(t *testing.T) {
+		exporter := &jumpstarterdevv1alpha1.Exporter{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-exporter", Namespace: "default"},
+		}
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(exporter).Build()
+
+		svc := &ControllerService{
+			Client: fakeClient,
+			Authn:  &passingAuthenticator{userName: "test-user"},
+			Authz:  passingAuthorizer{},
+			Attr:   &exporterAttributesGetter{namespace: "default", name: "test-exporter"},
+			Signer: signer,
+		}
+
+		_, err := svc.RotateToken(context.Background(), &pb.RotateTokenRequest{})
+		if err == nil {
+			t.Fatal("expected error with missing secret")
+		}
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("expected Internal error, got %v", err)
 		}
 	})
 }
