@@ -3,6 +3,7 @@ from jumpstarter_cli_common.alias import AliasedGroup
 from jumpstarter_cli_common.opt import opt_log_level
 from jumpstarter_cli_common.version import version
 
+from .apply import apply
 from .create import create
 from .delete import delete
 from .get import get
@@ -17,6 +18,7 @@ def admin():
 
 
 admin.add_command(get)
+admin.add_command(apply)
 admin.add_command(create)
 admin.add_command(delete)
 admin.add_command(import_res)

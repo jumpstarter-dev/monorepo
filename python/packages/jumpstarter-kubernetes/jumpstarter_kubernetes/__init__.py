@@ -1,3 +1,10 @@
+from .apply import (
+    ApplyV1Alpha1Api,
+    ManifestError,
+    V1Alpha1AppliedResource,
+    V1Alpha1AppliedResourceList,
+    load_manifests,
+)
 from .clients import ClientsV1Alpha1Api, V1Alpha1Client, V1Alpha1ClientList, V1Alpha1ClientStatus
 from .cluster import (
     check_jumpstarter_installation,
@@ -37,6 +44,11 @@ from .leases import (
 from .list import V1Alpha1List
 
 __all__ = [
+    "ApplyV1Alpha1Api",
+    "ManifestError",
+    "V1Alpha1AppliedResource",
+    "V1Alpha1AppliedResourceList",
+    "load_manifests",
     "ClientsV1Alpha1Api",
     "V1Alpha1Client",
     "V1Alpha1ClientList",
