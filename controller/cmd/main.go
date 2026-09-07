@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	jumpstarterdevv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/v1alpha1"
+	virtualtargetv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/virtualtarget/v1alpha1"
 	"github.com/jumpstarter-dev/jumpstarter/controller/internal/authentication"
 	"github.com/jumpstarter-dev/jumpstarter/controller/internal/authorization"
 	"github.com/jumpstarter-dev/jumpstarter/controller/internal/config"
@@ -101,6 +102,10 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(jumpstarterdevv1alpha1.AddToScheme(scheme))
+
+	// Read-only, for the lease controller: whether a selector that matches no
+	// exporter today could be satisfied by a pool provisioning one.
+	utilruntime.Must(virtualtargetv1alpha1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 	apiserverinstall.Install(scheme)

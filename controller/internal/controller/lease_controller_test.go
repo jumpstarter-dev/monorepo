@@ -21,6 +21,7 @@ import (
 	"time"
 
 	jumpstarterdevv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/v1alpha1"
+	virtualtargetv1alpha1 "github.com/jumpstarter-dev/jumpstarter/controller/api/virtualtarget/v1alpha1"
 	"github.com/jumpstarter-dev/jumpstarter/controller/internal/oidc"
 	cpb "github.com/jumpstarter-dev/jumpstarter/controller/internal/protocol/jumpstarter/client/v1"
 	. "github.com/onsi/ginkgo/v2"
@@ -2653,4 +2654,116 @@ var _ = Describe("pendingRequeueAfter", func() {
 		Entry("25s (hits cap)", 25*time.Second, 30*time.Second),
 		Entry("5m (capped)", 5*time.Minute, 30*time.Second),
 	)
+})
+
+var _ = Describe("Lease against an exporter set with nothing warm", func() {
+	const setName = "cold-pool"
+
+	newSet := func(maxReplicas, replicas int32) *virtualtargetv1alpha1.ExporterSet {
+		return &virtualtargetv1alpha1.ExporterSet{
+			ObjectMeta: metav1.ObjectMeta{Name: setName, Namespace: "default"},
+			Spec: virtualtargetv1alpha1.ExporterSetSpec{
+				VirtualTargetClassName: "qemu",
+				MinReplicas:            0,
+				MaxReplicas:            maxReplicas,
+				Selector:               metav1.LabelSelector{MatchLabels: map[string]string{"pool": "cold"}},
+				Template: virtualtargetv1alpha1.ExporterSetTemplate{
+					Metadata: virtualtargetv1alpha1.EmbeddedObjectMeta{
+						Labels: map[string]string{"pool": "cold"},
+					},
+				},
+			},
+			Status: virtualtargetv1alpha1.ExporterSetStatus{Replicas: replicas},
+		}
+	}
+
+	newLease := func(name string, matchLabels map[string]string) *jumpstarterdevv1alpha1.Lease {
+		return &jumpstarterdevv1alpha1.Lease{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: jumpstarterdevv1alpha1.LeaseSpec{
+				ClientRef: corev1.LocalObjectReference{Name: testClient.Name},
+				Selector:  metav1.LabelSelector{MatchLabels: matchLabels},
+				Duration:  &metav1.Duration{Duration: 2 * time.Second},
+			},
+		}
+	}
+
+	createSet := func(ctx context.Context, set *virtualtargetv1alpha1.ExporterSet) {
+		status := set.Status
+		Expect(k8sClient.Create(ctx, set)).To(Succeed())
+		set.Status = status
+		Expect(k8sClient.Status().Update(ctx, set)).To(Succeed())
+	}
+
+	AfterEach(func() {
+		ctx := context.Background()
+		set := &virtualtargetv1alpha1.ExporterSet{
+			ObjectMeta: metav1.ObjectMeta{Name: setName, Namespace: "default"},
+		}
+		_ = k8sClient.Delete(ctx, set)
+		deleteLeases(ctx, "cold-lease", "cold-lease-max", "no-pool-lease")
+	})
+
+	When("a pool could provision a matching exporter", func() {
+		It("should stay pending rather than ending the lease", func() {
+			ctx := context.Background()
+			createSet(ctx, newSet(4, 0))
+
+			lease := newLease("cold-lease", map[string]string{"pool": "cold"})
+			Expect(k8sClient.Create(ctx, lease)).To(Succeed())
+			_ = reconcileLease(ctx, lease)
+
+			updated := getLease(ctx, lease.Name)
+			// Ending it here is what stopped the set from ever seeing demand:
+			// countPendingLeases skips ended leases and requires Pending.
+			Expect(updated.Status.Ended).To(BeFalse())
+			Expect(meta.IsStatusConditionTrue(
+				updated.Status.Conditions,
+				string(jumpstarterdevv1alpha1.LeaseConditionTypeUnsatisfiable),
+			)).To(BeFalse())
+
+			condition := meta.FindStatusCondition(
+				updated.Status.Conditions,
+				string(jumpstarterdevv1alpha1.LeaseConditionTypePending),
+			)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Reason).To(Equal("Provisioning"))
+			Expect(condition.Message).To(ContainSubstring(setName))
+		})
+	})
+
+	When("the pool is already at its ceiling", func() {
+		It("should be unsatisfiable, since waiting would not help", func() {
+			ctx := context.Background()
+			createSet(ctx, newSet(2, 2))
+
+			lease := newLease("cold-lease-max", map[string]string{"pool": "cold"})
+			Expect(k8sClient.Create(ctx, lease)).To(Succeed())
+			_ = reconcileLease(ctx, lease)
+
+			updated := getLease(ctx, lease.Name)
+			Expect(meta.IsStatusConditionTrue(
+				updated.Status.Conditions,
+				string(jumpstarterdevv1alpha1.LeaseConditionTypeUnsatisfiable),
+			)).To(BeTrue())
+		})
+	})
+
+	When("no pool matches the selector", func() {
+		It("should still fail fast rather than waiting forever", func() {
+			ctx := context.Background()
+			createSet(ctx, newSet(4, 0))
+
+			lease := newLease("no-pool-lease", map[string]string{"pool": "does-not-exist"})
+			Expect(k8sClient.Create(ctx, lease)).To(Succeed())
+			_ = reconcileLease(ctx, lease)
+
+			updated := getLease(ctx, lease.Name)
+			Expect(meta.IsStatusConditionTrue(
+				updated.Status.Conditions,
+				string(jumpstarterdevv1alpha1.LeaseConditionTypeUnsatisfiable),
+			)).To(BeTrue())
+			Expect(updated.Status.Ended).To(BeTrue())
+		})
+	})
 })

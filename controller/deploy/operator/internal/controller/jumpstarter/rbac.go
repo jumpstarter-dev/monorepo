@@ -208,6 +208,15 @@ func (r *JumpstarterReconciler) createRole(jumpstarter *operatorv1alpha1.Jumpsta
 				Verbs:     []string{"update"},
 			},
 			{
+				// Read-only: the lease controller asks whether a selector that
+				// matches no exporter today could be satisfied by a pool
+				// provisioning one, which decides between pending and
+				// unsatisfiable. It never writes exporter sets.
+				APIGroups: []string{"virtualtarget.jumpstarter.dev"},
+				Resources: []string{"exportersets"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
 				APIGroups: []string{""},
 				Resources: []string{"events"},
 				Verbs:     []string{"create", "patch"},
