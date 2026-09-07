@@ -173,7 +173,7 @@ export:
 
 This is a **composite driver** with three children:
 - **power** — `VirtualPowerInterface`: `j power on`, `j power off [--destroy]`, `j power cycle`
-- **storage** — `FlasherInterface`: not yet implemented (planned: HO artifact upload API)
+- **storage** — `FlasherInterface`: flashes Cuttlefish image archives through the HO user-artifact API
 - **adb** — ADB server for device communication
 
 The exporter config also typically includes sibling drivers:
@@ -181,6 +181,53 @@ The exporter config also typically includes sibling drivers:
 - **bt_peer** (`jumpstarter-driver-bt-peer`) — Bluetooth peer device via bumble + rootcanal HCI
 
 Use `ref:` entries in the exporter config to expose children at the top level.
+
+### Storage flash
+
+Storage flash uploads archives to Host Orchestrator, extracts them, and merges
+their contents into one image directory. The documented target names are:
+
+- `images` — the device image ZIP (`*-img-*.zip`)
+- `host_package` — the Cuttlefish host package (`cvd-host_package.tar.gz`)
+
+For a split AAOS build, flash both artifacts in one call:
+
+```console
+j storage flash \
+  --target images:/path/to/aosp_cf_x86_64_auto-img-<build>.zip \
+  --target host_package:/path/to/cvd-host_package.tar.gz
+```
+
+The same targets accept `http://` or `https://` URLs. The client passes those
+URLs as presigned GET resources; the exporter downloads and streams them into
+the same hashing, deduplication, extraction, and staging path, so the artifact
+does not pass through the client.
+
+An untargeted single archive is treated as a complete bundle and is injected
+into both `common.host_package` and every
+`instances[].disk.default_build`. A targeted call may provide only one role;
+when an active generation exists, the missing role is carried forward by
+checksum into a new immutable image directory. This means
+`flash(host_package)` after a complete flash keeps the existing device images.
+For a fresh CVD, provide both targeted artifacts (or a complete untargeted
+bundle). Targeted roles must match the archive format; an unknown target is
+rejected.
+
+Flashing only stages the files. Recreate the CVD to select them:
+
+```console
+j power off --destroy
+j power on
+```
+
+The staged and active image-directory generations are exporter in-memory state.
+An exporter restart loses that state; the user artifacts remain in Host
+Orchestrator, but the configured `env_config` is used until the artifacts are
+flashed again. `power off --destroy` releases the active image directory after
+the CVD is deleted. At exporter teardown, pending staged directories are
+deleted best-effort; an active directory is retained because its CVD may still
+be running. Cleanup failures are logged at WARNING and may require manual
+cleanup on the Host Orchestrator.
 
 ## Usage
 

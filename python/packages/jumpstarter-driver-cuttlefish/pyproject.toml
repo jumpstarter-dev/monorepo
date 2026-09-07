@@ -6,7 +6,9 @@ license = "Apache-2.0"
 authors = [{ name = "Benny Zlotnik", email = "bzlotnik@redhat.com" }]
 requires-python = ">=3.11"
 dependencies = [
+    "anyio>=4.0.0",
     "click>=8.0.0",
+    "httpx>=0.27.0",
     "jumpstarter",
     "jumpstarter-driver-adb",
     "jumpstarter-driver-composite",
