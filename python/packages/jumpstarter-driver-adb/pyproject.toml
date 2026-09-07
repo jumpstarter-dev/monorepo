@@ -33,7 +33,12 @@ addopts = "--cov --cov-report=html --cov-report=xml"
 log_cli = true
 log_cli_level = "INFO"
 testpaths = ["jumpstarter_driver_adb"]
-asyncio_mode = "auto"
+# No `asyncio_mode`: pytest-asyncio is not a dependency here, so the setting was
+# dead ("Unknown config option") while implying a bare `async def test_` would run.
+# Async tests in this repo use `@pytest.mark.anyio` with an `anyio_backend` fixture
+# -- see packages/jumpstarter/conftest.py. pytest fails an unmarked coroutine test
+# outright ("async def functions are not natively supported"), so no extra guard is
+# needed; the misleading setting was the whole problem.
 
 [build-system]
 requires = ["hatchling", "hatch-vcs", "hatch-pin-jumpstarter"]
