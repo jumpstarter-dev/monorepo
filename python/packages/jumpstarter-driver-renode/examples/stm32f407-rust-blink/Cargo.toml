@@ -1,0 +1,17 @@
+[package]
+name = "stm32f407-rust-blink"
+version = "0.1.0"
+edition = "2021"
+description = "STM32F407 Discovery blink + USART2 (Renode / Jumpstarter example firmware)"
+license = "Apache-2.0"
+
+[[bin]]
+name = "stm32f407-rust-blink"
+test = false
+bench = false
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
+panic-halt = "1.0.0"
+stm32f4xx-hal = { version = "0.23.0", features = ["stm32f407"] }

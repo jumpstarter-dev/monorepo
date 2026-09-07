@@ -1,0 +1,21 @@
+# Renode driver exporter configuration examples
+#
+# Each example shows a different Renode target. The driver accepts any
+# .repl platform description (built-in or custom) and any UART peripheral
+# path -- new targets require only YAML configuration, no code changes.
+
+# --- STM32F407 Discovery (opensomeip FreeRTOS/ThreadX) ---
+# Uses Renode's built-in platform, USART2 for console output.
+#
+apiVersion: jumpstarter.dev/v1alpha1
+kind: ExporterConfig
+metadata:
+  name: renode-stm32f407
+  namespace: test
+export:
+  ecu:
+    type: jumpstarter_driver_renode.driver.Renode
+    config:
+      platform: "platforms/boards/stm32f4_discovery-kit.repl"
+      uart: "sysbus.usart2"
+
