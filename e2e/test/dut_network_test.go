@@ -266,29 +266,61 @@ var _ = Describe("DUT Network E2E Tests", Label("dut-network"), Ordered, Continu
 })
 
 // startTCPServer starts a one-shot TCP listener in the given network namespace.
-// It accepts a single connection, sends payload, and exits.  Returns the
+// It accepts a single connection, sends payload, and exits.  The function
+// waits for a "READY" line on stdout (emitted after listen()) so callers
+// know the port is actually open before sending traffic.  Returns the
 // *exec.Cmd so the caller can clean up via process-group kill.
 func startTCPServer(ns string, port int, payload string) *exec.Cmd {
 	serverScript := fmt.Sprintf(
-		"import socket; "+
+		"import socket,sys; "+
 			"s=socket.socket(); "+
 			"s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); "+
 			"s.bind(('', %d)); "+
 			"s.listen(1); "+
+			"print('READY',flush=True); "+
 			"s.settimeout(15); "+
 			"conn,_=s.accept(); "+
 			"conn.sendall(b'%s'); "+
 			"conn.close(); "+
 			"s.close()", port, payload)
-	fullArgs := []string{"ip", "netns", "exec", ns, "python3", "-c", serverScript}
+	fullArgs := []string{"ip", "netns", "exec", ns, "python3", "-u", "-c", serverScript}
 	bin, cmdArgs := sudoArgs(fullArgs...)
 	cmd := exec.Command(bin, cmdArgs...) //nolint:gosec
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stdout, err := cmd.StdoutPipe()
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	ExpectWithOffset(1, cmd.Start()).To(Succeed())
-	time.Sleep(500 * time.Millisecond)
+
+	readyCh := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 64)
+		n, readErr := stdout.Read(buf)
+		if readErr != nil {
+			readyCh <- fmt.Errorf("server stdout read failed: %w", readErr)
+			return
+		}
+		if !strings.Contains(string(buf[:n]), "READY") {
+			readyCh <- fmt.Errorf("unexpected server output: %s", string(buf[:n]))
+			return
+		}
+		readyCh <- nil
+	}()
+
+	select {
+	case readyErr := <-readyCh:
+		ExpectWithOffset(1, readyErr).NotTo(HaveOccurred(),
+			fmt.Sprintf("TCP server on port %d failed to become ready", port))
+	case <-time.After(5 * time.Second):
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		Fail(fmt.Sprintf("TCP server on port %d did not become ready within 5s", port))
+	}
+
 	return cmd
 }
 
+// killCmd sends SIGKILL to the process group and waits for exit.
 func killCmd(cmd *exec.Cmd) {
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	_ = cmd.Wait()
