@@ -25,24 +25,34 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1ejumpstarter/v1/telemetry.proto\x12\x0ejumpstarter.v1\x1a\x1fgoogle/protobuf/timestamp.proto"E\n\x0fPushLogsRequest\x122\n\x07entries\x18\x01 \x03(\x0b2\x18.jumpstarter.v1.LogEntryR\x07entries"H\n\x10PushLogsResponse\x12\x1a\n\x08accepted\x18\x01 \x01(\rR\x08accepted\x12\x18\n\x07dropped\x18\x02 \x01(\rR\x07dropped"\xe5\x03\n\x08LogEntry\x128\n\ttimestamp\x18\x01 \x01(\x0b2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1a\n\x08severity\x18\x02 \x01(\tR\x08severity\x12\x18\n\x07message\x18\x03 \x01(\tR\x07message\x12\x1c\n\tcomponent\x18\x04 \x01(\tR\tcomponent\x12\x1a\n\x08exporter\x18\x05 \x01(\tR\x08exporter\x12\x14\n\x05lease\x18\x06 \x01(\tR\x05lease\x12\x16\n\x06client\x18\x07 \x01(\tR\x06client\x12\x1c\n\toperation\x18\x08 \x01(\tR\toperation\x12\x16\n\x06result\x18\t \x01(\tR\x06result\x12\x1f\n\x0bdriver_type\x18\n \x01(\tR\ndriverType\x12L\n\x0cextra_fields\x18\x0b \x03(\x0b2).jumpstarter.v1.LogEntry.ExtraFieldsEntryR\x0bextraFields\x12\x1c\n\tnamespace\x18\x0c \x01(\tR\tnamespace\x1a>\n\x10ExtraFieldsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x028\x012a\n\x10TelemetryService\x12M\n\x08PushLogs\x12\x1f.jumpstarter.v1.PushLogsRequest\x1a .jumpstarter.v1.PushLogsResponseB\xd1\x01\n\x12com.jumpstarter.v1B\x0eTelemetryProtoP\x01ZRgithub.com/jumpstarter-dev/jumpstarter/controller/internal/protocol/jumpstarter/v1\xa2\x02\x03JXX\xaa\x02\x0eJumpstarter.V1\xca\x02\x0eJumpstarter\\V1\xe2\x02\x1aJumpstarter\\V1\\GPBMetadata\xea\x02\x0fJumpstarter::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1ejumpstarter/v1/telemetry.proto\x12\x0ejumpstarter.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xae\x01\n\x14MetricsStreamRequest\x12=\n\x08register\x18\x01 \x01(\x0b\x32\x1f.jumpstarter.v1.MetricsRegisterH\x00R\x08register\x12P\n\x0fscrape_response\x18\x02 \x01(\x0b\x32%.jumpstarter.v1.MetricsScrapeResponseH\x00R\x0escrapeResponseB\x05\n\x03msg\"-\n\x0fMetricsRegister\x12\x1a\n\x08identity\x18\x01 \x01(\tR\x08identity\"t\n\x15MetricsScrapeResponse\x12!\n\x0cmetrics_text\x18\x01 \x01(\x0cR\x0bmetricsText\x12\x38\n\ttimestamp\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\ttimestamp\"m\n\x15MetricsStreamResponse\x12M\n\x0escrape_request\x18\x01 \x01(\x0b\x32$.jumpstarter.v1.MetricsScrapeRequestH\x00R\rscrapeRequestB\x05\n\x03msg\"\x16\n\x14MetricsScrapeRequest\"E\n\x0fPushLogsRequest\x12\x32\n\x07\x65ntries\x18\x01 \x03(\x0b\x32\x18.jumpstarter.v1.LogEntryR\x07\x65ntries\"H\n\x10PushLogsResponse\x12\x1a\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\rR\x08\x61\x63\x63\x65pted\x12\x18\n\x07\x64ropped\x18\x02 \x01(\rR\x07\x64ropped\"\xe5\x03\n\x08LogEntry\x12\x38\n\ttimestamp\x18\x01 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1a\n\x08severity\x18\x02 \x01(\tR\x08severity\x12\x18\n\x07message\x18\x03 \x01(\tR\x07message\x12\x1c\n\tcomponent\x18\x04 \x01(\tR\tcomponent\x12\x1a\n\x08\x65xporter\x18\x05 \x01(\tR\x08\x65xporter\x12\x14\n\x05lease\x18\x06 \x01(\tR\x05lease\x12\x16\n\x06\x63lient\x18\x07 \x01(\tR\x06\x63lient\x12\x1c\n\toperation\x18\x08 \x01(\tR\toperation\x12\x16\n\x06result\x18\t \x01(\tR\x06result\x12\x1f\n\x0b\x64river_type\x18\n \x01(\tR\ndriverType\x12L\n\x0c\x65xtra_fields\x18\x0b \x03(\x0b\x32).jumpstarter.v1.LogEntry.ExtraFieldsEntryR\x0b\x65xtraFields\x12\x1c\n\tnamespace\x18\x0c \x01(\tR\tnamespace\x1a>\n\x10\x45xtraFieldsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x32\xc3\x01\n\x10TelemetryService\x12`\n\rMetricsStream\x12$.jumpstarter.v1.MetricsStreamRequest\x1a%.jumpstarter.v1.MetricsStreamResponse(\x01\x30\x01\x12M\n\x08PushLogs\x12\x1f.jumpstarter.v1.PushLogsRequest\x1a .jumpstarter.v1.PushLogsResponseB}\n\x12\x63om.jumpstarter.v1B\x0eTelemetryProtoP\x01\xa2\x02\x03JXX\xaa\x02\x0eJumpstarter.V1\xca\x02\x0eJumpstarter\\V1\xe2\x02\x1aJumpstarter\\V1\\GPBMetadata\xea\x02\x0fJumpstarter::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'jumpstarter.v1.telemetry_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
-  _globals['DESCRIPTOR']._serialized_options = b'\n\022com.jumpstarter.v1B\016TelemetryProtoP\001ZRgithub.com/jumpstarter-dev/jumpstarter/controller/internal/protocol/jumpstarter/v1\242\002\003JXX\252\002\016Jumpstarter.V1\312\002\016Jumpstarter\\V1\342\002\032Jumpstarter\\V1\\GPBMetadata\352\002\017Jumpstarter::V1'
+  _globals['DESCRIPTOR']._serialized_options = b'\n\022com.jumpstarter.v1B\016TelemetryProtoP\001\242\002\003JXX\252\002\016Jumpstarter.V1\312\002\016Jumpstarter\\V1\342\002\032Jumpstarter\\V1\\GPBMetadata\352\002\017Jumpstarter::V1'
   _globals['_LOGENTRY_EXTRAFIELDSENTRY']._loaded_options = None
   _globals['_LOGENTRY_EXTRAFIELDSENTRY']._serialized_options = b'8\001'
-  _globals['_PUSHLOGSREQUEST']._serialized_start=83
-  _globals['_PUSHLOGSREQUEST']._serialized_end=152
-  _globals['_PUSHLOGSRESPONSE']._serialized_start=154
-  _globals['_PUSHLOGSRESPONSE']._serialized_end=226
-  _globals['_LOGENTRY']._serialized_start=229
-  _globals['_LOGENTRY']._serialized_end=714
-  _globals['_LOGENTRY_EXTRAFIELDSENTRY']._serialized_start=652
-  _globals['_LOGENTRY_EXTRAFIELDSENTRY']._serialized_end=714
-  _globals['_TELEMETRYSERVICE']._serialized_start=716
-  _globals['_TELEMETRYSERVICE']._serialized_end=813
+  _globals['_METRICSSTREAMREQUEST']._serialized_start=84
+  _globals['_METRICSSTREAMREQUEST']._serialized_end=258
+  _globals['_METRICSREGISTER']._serialized_start=260
+  _globals['_METRICSREGISTER']._serialized_end=305
+  _globals['_METRICSSCRAPERESPONSE']._serialized_start=307
+  _globals['_METRICSSCRAPERESPONSE']._serialized_end=423
+  _globals['_METRICSSTREAMRESPONSE']._serialized_start=425
+  _globals['_METRICSSTREAMRESPONSE']._serialized_end=534
+  _globals['_METRICSSCRAPEREQUEST']._serialized_start=536
+  _globals['_METRICSSCRAPEREQUEST']._serialized_end=558
+  _globals['_PUSHLOGSREQUEST']._serialized_start=560
+  _globals['_PUSHLOGSREQUEST']._serialized_end=629
+  _globals['_PUSHLOGSRESPONSE']._serialized_start=631
+  _globals['_PUSHLOGSRESPONSE']._serialized_end=703
+  _globals['_LOGENTRY']._serialized_start=706
+  _globals['_LOGENTRY']._serialized_end=1191
+  _globals['_LOGENTRY_EXTRAFIELDSENTRY']._serialized_start=1129
+  _globals['_LOGENTRY_EXTRAFIELDSENTRY']._serialized_end=1191
+  _globals['_TELEMETRYSERVICE']._serialized_start=1194
+  _globals['_TELEMETRYSERVICE']._serialized_end=1389
 # @@protoc_insertion_point(module_scope)
