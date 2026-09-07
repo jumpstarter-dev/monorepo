@@ -136,6 +136,18 @@ offering the `dut-network` driver (nftables NAT/masquerade + DHCP/DNS). CI insta
 | should add, list, and remove DNS entries via CLI | `add-dns e2e-test.lab.local 10.0.0.42`, `dns-entries`, `remove-dns`, `dns-entries` | entry appears then disappears |
 | should allow TCP connections from DUT to external via NAT | start Python TCP server in ext ns, connect from DUT ns via NAT | client receives "E2E_OK" |
 
+### Filter sub-lane (`exporter-dut-network-filter.yaml`)
+
+Same netns topology, separate exporter on port 19092 with an egress filter
+(`policy: drop`, one `accept` rule for TCP port 9997 to `10.99.0.1/32`).
+
+| Test Name | Steps | Pass Check |
+|---|---|---|
+| should show filter rules in nftables output | `j dut-network nat-rules` | output contains "drop" and `dport 9997` |
+| should allow TCP to the permitted port | TCP server on allowed port 9997, client connects from DUT ns | client receives "FILTER_OK" |
+| should block TCP to a non-allowed port | TCP server on blocked port 9998, client connects from DUT ns | connection fails (timeout/reset) |
+| should block ICMP ping when egress policy is drop | ping from DUT ns to ext IP | ping fails (`Consistently`) |
+
 ---
 
 ## Lane: `exit-on-lease-end` (`exit_on_lease_end_test.go`)

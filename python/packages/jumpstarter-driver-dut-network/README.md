@@ -107,6 +107,75 @@ export:
           ip: "10.26.28.2"
 ```
 
+### Traffic Filtering
+
+Control which network destinations DUTs can reach using nftables-based egress
+and ingress rules.  Filters are applied at the **interface level** (all traffic
+through the DUT interface), so they cannot be bypassed by MAC or IP spoofing.
+
+**Egress allowlist** — block everything except specific destinations:
+
+```yaml
+export:
+  dut-network:
+    type: jumpstarter_driver_dut_network.driver.DutNetwork
+    config:
+      interface: "eth2"
+      nat_mode: "masquerade"
+      filter:
+        egress:
+          policy: drop
+          rules:
+            - action: accept
+              destination: "198.51.100.0/24"
+            - action: accept
+              destination: "203.0.113.0/24"
+              port: 443
+              protocol: tcp
+```
+
+**Egress denylist** — allow everything except specific destinations:
+
+```yaml
+      filter:
+        egress:
+          policy: accept
+          rules:
+            - action: drop
+              destination: "10.0.0.0/8"
+            - action: drop
+              destination: "172.16.0.0/12"
+```
+
+**Ingress filtering** — restrict inbound connections (new connections only;
+return traffic for DUT-initiated connections is always allowed via conntrack):
+
+```yaml
+      filter:
+        ingress:
+          policy: drop
+          rules:
+            - action: accept
+              source: "198.51.100.0/24"
+              port: 22
+              protocol: tcp
+```
+
+Both `egress` and `ingress` can be combined in the same config.  The filter
+is set by the exporter admin and is not modifiable by the DUT user at runtime.
+
+#### Filter Rule Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `policy` | no | Default action: `accept` (default) or `drop` |
+| `rules` | no | Ordered list of rules evaluated before the policy |
+| `rules[].action` | yes | `accept` or `drop` |
+| `rules[].destination` | no | CIDR for egress matching (e.g. `10.0.0.0/8`) |
+| `rules[].source` | no | CIDR for ingress matching |
+| `rules[].port` | no | Destination port (requires `protocol`) |
+| `rules[].protocol` | no | `tcp` or `udp` (required when `port` is set) |
+
 ### Reference
 
 | Parameter | Type | Default | Description |
@@ -124,6 +193,7 @@ export:
 | `state_dir` | str | `/var/lib/jumpstarter/dut-network-{interface}/` | Directory for dnsmasq state files |
 | `nat_mode` | str | `masquerade` | NAT mode: `masquerade`, `1to1`, `disabled`, or `none` |
 | `public_interface` | str | None | Interface for IP alias (defaults to upstream) |
+| `filter` | dict | None | Traffic filter config: `{egress?, ingress?}` with `policy` and `rules` (see above) |
 
 #### Address Entry Fields
 
