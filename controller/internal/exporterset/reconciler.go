@@ -330,7 +330,7 @@ func (r *ExporterSetReconciler) scaleUp(
 ) error {
 	logger := log.FromContext(ctx)
 
-	for i := int32(0); i < count; i++ {
+	for range count {
 		exporter := &jumpstarterdevv1alpha1.Exporter{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: es.Name + "-",
@@ -339,7 +339,7 @@ func (r *ExporterSetReconciler) scaleUp(
 				Annotations:  maps.Clone(es.Spec.Template.Metadata.Annotations),
 			},
 			Spec: jumpstarterdevv1alpha1.ExporterSpec{
-				Enabled: boolPtr(true),
+				Enabled: new(true),
 			},
 		}
 
@@ -371,7 +371,7 @@ func (r *ExporterSetReconciler) ensureExporterPods(
 	ctx context.Context,
 	es *virtualtargetv1alpha1.ExporterSet,
 	vtc *virtualtargetv1alpha1.VirtualTargetClass,
-	mergedParameters map[string]interface{},
+	mergedParameters map[string]any,
 	ownedExporters []jumpstarterdevv1alpha1.Exporter,
 	podsByExporter map[string][]corev1.Pod,
 ) (waiting bool, err error) {
@@ -432,7 +432,7 @@ func (r *ExporterSetReconciler) syncConfigSecret(
 	es *virtualtargetv1alpha1.ExporterSet,
 	exp *jumpstarterdevv1alpha1.Exporter,
 	caBundle string,
-	mergedParameters map[string]interface{},
+	mergedParameters map[string]any,
 ) error {
 	configSecret, err := r.buildExporterConfigSecret(ctx, es, exp, caBundle, mergedParameters)
 	if err != nil {
@@ -463,7 +463,7 @@ func (r *ExporterSetReconciler) createExporterPod(
 	ctx context.Context,
 	es *virtualtargetv1alpha1.ExporterSet,
 	vtc *virtualtargetv1alpha1.VirtualTargetClass,
-	mergedParameters map[string]interface{},
+	mergedParameters map[string]any,
 	images *virtualtargetv1alpha1.ImageOverrides,
 	exp *jumpstarterdevv1alpha1.Exporter,
 ) error {
@@ -872,7 +872,7 @@ func (r *ExporterSetReconciler) reconcileScaleDown(
 				continue
 			}
 
-			exp.Spec.Enabled = boolPtr(false)
+			exp.Spec.Enabled = new(false)
 			if err := r.Update(ctx, exp); err != nil {
 				return ctrl.Result{}, fmt.Errorf("unable to disable Exporter %s: %w", exp.Name, err)
 			}
@@ -1437,8 +1437,6 @@ func isOwnedByKind(obj client.Object, kind string) bool {
 	return false
 }
 
-func boolPtr(b bool) *bool { return &b }
-
 func atMaxReplicas(es *virtualtargetv1alpha1.ExporterSet, current int32) bool {
 	return es.Spec.MaxReplicas > 0 && current >= es.Spec.MaxReplicas
 }
@@ -1454,7 +1452,7 @@ func maxScaleUp(es *virtualtargetv1alpha1.ExporterSet, current int32) int32 {
 	return room
 }
 
-func requeueConflict(logger interface{ Info(string, ...interface{}) }, err error) (ctrl.Result, error) {
+func requeueConflict(logger interface{ Info(string, ...any) }, err error) (ctrl.Result, error) {
 	if apierrors.IsConflict(err) {
 		logger.Info("conflict on status update, will retry")
 	}
@@ -1465,9 +1463,9 @@ func requeueConflict(logger interface{ Info(string, ...interface{}) }, err error
 func deepMergeParameters(
 	classParams *apiextensionsv1.JSON,
 	setParams *apiextensionsv1.JSON,
-) (map[string]interface{}, error) {
-	base := make(map[string]interface{})
-	override := make(map[string]interface{})
+) (map[string]any, error) {
+	base := make(map[string]any)
+	override := make(map[string]any)
 
 	if classParams != nil && classParams.Raw != nil {
 		if err := json.Unmarshal(classParams.Raw, &base); err != nil {
@@ -1484,14 +1482,12 @@ func deepMergeParameters(
 	return deepMerge(base, override), nil
 }
 
-func deepMerge(base, override map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{}, len(base)+len(override))
-	for k, v := range base {
-		result[k] = v
-	}
+func deepMerge(base, override map[string]any) map[string]any {
+	result := make(map[string]any, len(base)+len(override))
+	maps.Copy(result, base)
 	for k, v := range override {
-		if baseMap, ok := result[k].(map[string]interface{}); ok {
-			if overrideMap, ok := v.(map[string]interface{}); ok {
+		if baseMap, ok := result[k].(map[string]any); ok {
+			if overrideMap, ok := v.(map[string]any); ok {
 				result[k] = deepMerge(baseMap, overrideMap)
 				continue
 			}

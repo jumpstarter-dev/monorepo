@@ -57,6 +57,12 @@ jobs:
           go-version-file: .go-version
           cache-dependency-path: "**/go.sum"
 
+      - name: Run go fix
+        working-directory: controller
+        run: |
+          go fix ./...
+          git diff --exit-code
+
       - name: Run go linter
         working-directory: controller
         run: make lint

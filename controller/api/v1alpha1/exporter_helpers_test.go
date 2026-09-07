@@ -74,16 +74,11 @@ func TestExporter_Usernames(t *testing.T) {
 	t.Run("with custom username", func(t *testing.T) {
 		e := &Exporter{
 			ObjectMeta: metav1.ObjectMeta{Name: "my-exporter", Namespace: "default", UID: types.UID("123")},
-			Spec:       ExporterSpec{Username: stringPtr("custom-user")},
+			Spec:       ExporterSpec{Username: new("custom-user")},
 		}
 		got := e.Usernames("internal:")
 		if len(got) != 2 || got[1] != "custom-user" {
 			t.Errorf("got %v, want internal subject and custom username", got)
 		}
 	})
-}
-
-// Helper function to create string pointers
-func stringPtr(s string) *string {
-	return &s
 }

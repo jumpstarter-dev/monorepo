@@ -62,7 +62,7 @@ func (s *DashboardService) Start(ctx context.Context) error {
 			return
 		}
 
-		c.HTML(http.StatusOK, "index.html", map[string]interface{}{
+		c.HTML(http.StatusOK, "index.html", map[string]any{
 			"Exporters": exporters.Items,
 			"Clients":   clients.Items,
 			"Leases":    leases.Items,

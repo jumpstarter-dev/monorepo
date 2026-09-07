@@ -80,7 +80,7 @@ type exporterConfigTLS struct {
 type exporterConfigDriver struct {
 	Type     string                          `json:"type,omitempty"`
 	Ref      string                          `json:"ref,omitempty"`
-	Config   interface{}                     `json:"config,omitempty"`
+	Config   any                             `json:"config,omitempty"`
 	Children map[string]exporterConfigDriver `json:"children,omitempty"`
 }
 
@@ -92,7 +92,7 @@ func (r *ExporterSetReconciler) buildExporterConfigSecret(
 	es *virtualtargetv1alpha1.ExporterSet,
 	exporter *jumpstarterdevv1alpha1.Exporter,
 	caBundle string,
-	mergedParameters map[string]interface{},
+	mergedParameters map[string]any,
 ) (*corev1.Secret, error) {
 	token, err := r.readCredentialToken(ctx, exporter)
 	if err != nil {
@@ -169,7 +169,7 @@ func buildExportMap(drivers []virtualtargetv1alpha1.DriverConfig) (map[string]ex
 			continue
 		}
 
-		var config interface{}
+		var config any
 		if d.Config != nil && d.Config.Raw != nil {
 			if err := json.Unmarshal(d.Config.Raw, &config); err != nil {
 				return nil, fmt.Errorf("unmarshal config for driver %q: %w", name, err)

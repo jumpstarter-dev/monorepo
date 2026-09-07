@@ -107,11 +107,11 @@ func makeExporter(name string, online bool, leased bool, enabled bool) *jumpstar
 				Kind:       kindExporterSet,
 				Name:       "demo-set",
 				UID:        testExporterSetUID,
-				Controller: boolPtr(true),
+				Controller: new(true),
 			}},
 		},
 		Spec: jumpstarterdevv1alpha1.ExporterSpec{
-			Enabled: boolPtr(enabled),
+			Enabled: new(enabled),
 		},
 	}
 
@@ -208,7 +208,7 @@ func makePod(name string, phase corev1.PodPhase) *corev1.Pod {
 				Kind:       kindExporter,
 				Name:       name,
 				UID:        types.UID(name + "-uid"),
-				Controller: boolPtr(true),
+				Controller: new(true),
 			}},
 		},
 		Status: corev1.PodStatus{Phase: phase},
@@ -996,25 +996,25 @@ func TestComputePoolState(t *testing.T) {
 // --- Deep merge tests ---
 
 func TestDeepMerge_mapsRecursive(t *testing.T) {
-	base := map[string]interface{}{
-		"resources": map[string]interface{}{
+	base := map[string]any{
+		"resources": map[string]any{
 			"cpu":     "4",
 			"memory":  "4Gi",
 			"storage": "16Gi",
 		},
-		"firmware": map[string]interface{}{
+		"firmware": map[string]any{
 			"url": "registry.example.com/fw:v1",
 		},
 	}
-	override := map[string]interface{}{
-		"resources": map[string]interface{}{
+	override := map[string]any{
+		"resources": map[string]any{
 			"memory": "8Gi",
 		},
 	}
 
 	result := deepMerge(base, override)
 
-	resources := result["resources"].(map[string]interface{})
+	resources := result["resources"].(map[string]any)
 	if resources["cpu"] != "4" {
 		t.Errorf("cpu = %v, want 4", resources["cpu"])
 	}
@@ -1025,15 +1025,15 @@ func TestDeepMerge_mapsRecursive(t *testing.T) {
 		t.Errorf("storage = %v, want 16Gi", resources["storage"])
 	}
 
-	firmware := result["firmware"].(map[string]interface{})
+	firmware := result["firmware"].(map[string]any)
 	if firmware["url"] != "registry.example.com/fw:v1" {
 		t.Errorf("firmware.url = %v, want original", firmware["url"])
 	}
 }
 
 func TestDeepMerge_scalarReplace(t *testing.T) {
-	base := map[string]interface{}{"machineType": "virt"}
-	override := map[string]interface{}{"machineType": "q35"}
+	base := map[string]any{"machineType": "virt"}
+	override := map[string]any{"machineType": "q35"}
 
 	result := deepMerge(base, override)
 	if result["machineType"] != "q35" {
@@ -1042,11 +1042,11 @@ func TestDeepMerge_scalarReplace(t *testing.T) {
 }
 
 func TestDeepMerge_listReplace(t *testing.T) {
-	base := map[string]interface{}{"ports": []interface{}{22, 80}}
-	override := map[string]interface{}{"ports": []interface{}{443}}
+	base := map[string]any{"ports": []any{22, 80}}
+	override := map[string]any{"ports": []any{443}}
 
 	result := deepMerge(base, override)
-	ports := result["ports"].([]interface{})
+	ports := result["ports"].([]any)
 	if len(ports) != 1 || ports[0] != 443 {
 		t.Errorf("ports = %v, want [443]", ports)
 	}
@@ -1911,7 +1911,7 @@ func TestEnsureExporterPods_skipsDisabledExporters(t *testing.T) {
 	exp2 := makeExporter("exp-2", false, false, true)
 	exp2.Status.Credential = &corev1.LocalObjectReference{Name: "exp-2-exporter"}
 	exp2.Status.Endpoint = testEndpoint
-	exp2.Spec.Enabled = boolPtr(false)
+	exp2.Spec.Enabled = new(false)
 	credSecret := makeCredentialSecret("exp-2")
 
 	r, _ := newReconciler(t, es, makeVTC(), makeCACM(), exp2, credSecret)

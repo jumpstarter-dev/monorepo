@@ -6,7 +6,6 @@ import (
 	cpb "github.com/jumpstarter-dev/jumpstarter/controller/internal/protocol/jumpstarter/client/v1"
 	pb "github.com/jumpstarter-dev/jumpstarter/controller/internal/protocol/jumpstarter/v1"
 	"github.com/jumpstarter-dev/jumpstarter/controller/internal/service/utils"
-	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/meta"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -42,7 +41,7 @@ func (e *Exporter) ToProtobuf() *cpb.Exporter {
 		Online:        isOnline, //nolint:staticcheck // populated for older clients still reading this field
 		Status:        stringToProtoStatus(e.Status.ExporterStatusValue),
 		StatusMessage: e.Status.StatusMessage,
-		Enabled:       proto.Bool(e.IsEnabled()),
+		Enabled:       new(e.IsEnabled()),
 	}
 }
 

@@ -192,7 +192,7 @@ func truncateRunes(s string, maxRunes int) string {
 		return s
 	}
 	i := 0
-	for n := 0; n < maxRunes; n++ {
+	for range maxRunes {
 		_, size := utf8.DecodeRuneInString(s[i:])
 		i += size
 	}

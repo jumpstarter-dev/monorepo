@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -19,7 +20,6 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/utils/ptr"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -239,18 +239,14 @@ func LeaseFromProtobuf(
 	var specTags map[string]string
 	if len(req.Tags) > 0 {
 		specTags = make(map[string]string, len(req.Tags))
-		for k, v := range req.Tags {
-			specTags[k] = v
-		}
+		maps.Copy(specTags, req.Tags)
 	}
 
 	// Store user context in spec
 	var specContext map[string]string
 	if len(req.Context) > 0 {
 		specContext = make(map[string]string, len(req.Context))
-		for k, v := range req.Context {
-			specContext[k] = v
-		}
+		maps.Copy(specContext, req.Context)
 	}
 
 	return &Lease{
@@ -297,14 +293,14 @@ func (l *Lease) ToProtobuf() *cpb.Lease {
 	lease := cpb.Lease{
 		Name:          fmt.Sprintf("namespaces/%s/leases/%s", l.Namespace, l.Name),
 		Selector:      metav1.FormatLabelSelector(&l.Spec.Selector),
-		Client:        ptr.To(fmt.Sprintf("namespaces/%s/clients/%s", l.Namespace, l.Spec.ClientRef.Name)),
+		Client:        new(fmt.Sprintf("namespaces/%s/clients/%s", l.Namespace, l.Spec.ClientRef.Name)),
 		Conditions:    conditions,
 		Tags:          l.Spec.Tags,
 		AllowDisabled: l.Spec.AllowDisabled,
 		Context:       l.Spec.Context,
 	}
 	if l.Spec.ExporterRef != nil {
-		lease.ExporterName = ptr.To(l.Spec.ExporterRef.Name)
+		lease.ExporterName = new(l.Spec.ExporterRef.Name)
 	}
 	if l.Spec.Duration != nil {
 		lease.Duration = durationpb.New(l.Spec.Duration.Duration)
@@ -331,7 +327,7 @@ func (l *Lease) ToProtobuf() *cpb.Lease {
 		lease.EffectiveDuration = durationpb.New(effectiveDuration)
 	}
 	if l.Status.ExporterRef != nil {
-		lease.Exporter = ptr.To(utils.UnparseExporterIdentifier(kclient.ObjectKey{
+		lease.Exporter = new(utils.UnparseExporterIdentifier(kclient.ObjectKey{
 			Namespace: l.Namespace,
 			Name:      l.Status.ExporterRef.Name,
 		}))

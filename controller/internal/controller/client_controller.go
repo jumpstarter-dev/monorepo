@@ -131,7 +131,7 @@ func (r *ClientReconciler) reconcileStatusEndpoint(
 	return nil
 }
 
-func (r *ClientReconciler) emitEventf(client *jumpstarterdevv1alpha1.Client, eventType, reason, msgFmt string, args ...interface{}) {
+func (r *ClientReconciler) emitEventf(client *jumpstarterdevv1alpha1.Client, eventType, reason, msgFmt string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}

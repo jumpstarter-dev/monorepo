@@ -178,7 +178,7 @@ func (s *Service) SetupWithManager(mgr ctrl.Manager) error {
 
 // handleLandingPage serves the landing page with login instructions
 func (s *Service) handleLandingPage(c *gin.Context) {
-	c.HTML(http.StatusOK, "index.html", map[string]interface{}{
+	c.HTML(http.StatusOK, "index.html", map[string]any{
 		"GRPCEndpoint":   s.config.GRPCEndpoint,
 		"RouterEndpoint": s.config.RouterEndpoint,
 		"LoginEndpoint":  s.config.LoginEndpoint,

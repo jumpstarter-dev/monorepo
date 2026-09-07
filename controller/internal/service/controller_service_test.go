@@ -673,7 +673,7 @@ func TestListenQueueStaleReaderConsumesDialToken(t *testing.T) {
 func TestListenQueueStaleReaderAlwaysDetectsSupersession(t *testing.T) {
 	iterations := 100
 
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		svc := &ControllerService{}
 		leaseName := "test-lease-concurrent"
 
@@ -747,7 +747,7 @@ func TestDialRejectsSupersededQueue(t *testing.T) {
 func TestDialWithPreSwapReferenceNeverSendsToStaleQueue(t *testing.T) {
 	iterations := 500
 
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		svc := &ControllerService{}
 		leaseName := "test-lease-pre-swap-ref"
 
@@ -893,7 +893,7 @@ func TestDialSendToListenerSerializesWithSwap(t *testing.T) {
 	// This tests the scenario where the swap completes before the send.
 	iterations := 500
 
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		svc := &ControllerService{}
 		leaseName := "test-lease-serialized"
 
@@ -949,7 +949,7 @@ func TestDialSendToListenerConcurrentWithSwapNeverLandsOnSuperseded(t *testing.T
 	sentToG2 := 0
 	rejected := 0
 
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		svc := &ControllerService{}
 		leaseName := "test-lease-concurrent-serial"
 
@@ -1255,10 +1255,8 @@ func TestListenQueueConcurrentDialDuringReconnection(t *testing.T) {
 	var g2 *listenQueue
 	g2ListenerDone := make(chan struct{})
 
-	for i := 0; i < dialAttempts; i++ {
-		dialWg.Add(1)
-		go func() {
-			defer dialWg.Done()
+	for i := range dialAttempts {
+		dialWg.Go(func() {
 			ctx := context.Background()
 			err := svc.sendToListener(ctx, leaseName, &pb.ListenResponse{
 				RouterEndpoint: "ep", RouterToken: testRouterToken,
@@ -1272,7 +1270,7 @@ func TestListenQueueConcurrentDialDuringReconnection(t *testing.T) {
 			sentMu.Lock()
 			sentCount++
 			sentMu.Unlock()
-		}()
+		})
 
 		if i == 25 {
 			g2 = &listenQueue{
@@ -1375,7 +1373,7 @@ func TestListenQueueListenLoopDeliversTokensAndExitsOnDone(t *testing.T) {
 	wrapper.ch <- &pb.ListenResponse{RouterEndpoint: "ep1", RouterToken: "tok1"}
 	wrapper.ch <- &pb.ListenResponse{RouterEndpoint: "ep2", RouterToken: "tok2"}
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case msg := <-delivered:
 			if msg.RouterEndpoint == "" || msg.RouterToken == "" {
@@ -1417,7 +1415,7 @@ func TestSendToListenerReturnsResourceExhaustedWithCancelledContextAndBufferFull
 	}
 	svc.swapListenQueue(leaseName, q)
 
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		q.ch <- &pb.ListenResponse{RouterEndpoint: "fill", RouterToken: "fill"}
 	}
 
@@ -1450,7 +1448,7 @@ func TestSendToListenerReturnsImmediatelyDuringBackpressure(t *testing.T) {
 	}
 	svc.swapListenQueue(leaseName, q)
 
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		q.ch <- &pb.ListenResponse{RouterEndpoint: "fill", RouterToken: "fill"}
 	}
 
@@ -1544,13 +1542,11 @@ func TestLeaseLockRefCountConcurrentAcquireRelease(t *testing.T) {
 	var wg sync.WaitGroup
 	goroutines := 100
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			svc.acquireLeaseLock(leaseName)
 			svc.releaseLeaseLock(leaseName)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1570,10 +1566,8 @@ func TestLeaseLockRefCountConcurrentOverlappingListeners(t *testing.T) {
 	allAcquired := sync.WaitGroup{}
 	allAcquired.Add(goroutines)
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			mu := svc.acquireLeaseLock(leaseName)
 			defer svc.releaseLeaseLock(leaseName)
 
@@ -1583,7 +1577,7 @@ func TestLeaseLockRefCountConcurrentOverlappingListeners(t *testing.T) {
 			mu.Lock()
 			counter++
 			mu.Unlock()
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1669,7 +1663,7 @@ func TestSendToListenerReturnsResourceExhaustedWhenBufferFull(t *testing.T) {
 	}
 	svc.swapListenQueue(leaseName, q)
 
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		q.ch <- &pb.ListenResponse{RouterEndpoint: "fill", RouterToken: "fill"}
 	}
 
@@ -1699,7 +1693,7 @@ func TestSendToListenerDoesNotBlockMutexWhenBufferFull(t *testing.T) {
 	}
 	svc.swapListenQueue(leaseName, q)
 
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		q.ch <- &pb.ListenResponse{RouterEndpoint: "fill", RouterToken: "fill"}
 	}
 
@@ -1748,7 +1742,7 @@ func TestSwapNotBlockedWhenBufferFull(t *testing.T) {
 	}
 	svc.swapListenQueue(leaseName, g1)
 
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		g1.ch <- &pb.ListenResponse{RouterEndpoint: "fill", RouterToken: "fill"}
 	}
 

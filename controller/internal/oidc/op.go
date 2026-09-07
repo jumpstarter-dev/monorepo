@@ -91,7 +91,7 @@ func (k *Signer) SetTokenLifetime(d time.Duration) {
 }
 
 func (k *Signer) Validate(token string) error {
-	_, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+	_, err := jwt.Parse(token, func(t *jwt.Token) (any, error) {
 		return &k.privatekey.PublicKey, nil
 	},
 		jwt.WithValidMethods([]string{
@@ -106,7 +106,7 @@ func (k *Signer) Validate(token string) error {
 // ParseSubject validates the token and returns the subject claim.
 func (k *Signer) ParseSubject(token string) (string, error) {
 	claims := &jwt.RegisteredClaims{}
-	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (interface{}, error) {
+	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
 		return &k.privatekey.PublicKey, nil
 	},
 		jwt.WithValidMethods([]string{

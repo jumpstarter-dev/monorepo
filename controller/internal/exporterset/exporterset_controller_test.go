@@ -270,7 +270,7 @@ var _ = Describe("ExporterSet Controller", func() {
 						Labels:    map[string]string{"exporterset": "test-scale-down"},
 					},
 					Spec: jumpstarterdevv1alpha1.ExporterSpec{
-						Enabled: boolPtr(true),
+						Enabled: new(true),
 					},
 				}
 				Expect(envTestClient.Create(envTestCtx, exp)).To(Succeed())
@@ -281,7 +281,7 @@ var _ = Describe("ExporterSet Controller", func() {
 					Kind:       "ExporterSet",
 					Name:       es.Name,
 					UID:        es.UID,
-					Controller: boolPtr(true),
+					Controller: new(true),
 				}}
 				Expect(envTestClient.Update(envTestCtx, exp)).To(Succeed())
 

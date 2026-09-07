@@ -48,7 +48,7 @@ func TestMetricsEndpointServesPrometheusText(t *testing.T) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	var resp *http.Response
 	var lastErr error
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		resp, lastErr = client.Get("http://" + addr + "/metrics")
 		if lastErr == nil {
 			break
@@ -135,7 +135,7 @@ func TestMetricsServerShutdown(t *testing.T) {
 
 	client := &http.Client{Timeout: 2 * time.Second}
 	var lastErr error
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		var resp *http.Response
 		resp, lastErr = client.Get("http://" + addr + "/metrics")
 		if lastErr == nil {

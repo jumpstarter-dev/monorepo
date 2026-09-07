@@ -15,9 +15,9 @@ type Config struct {
 	Authentication   Authentication   `json:"authentication" yaml:"authentication"`
 	Provisioning     Provisioning     `json:"provisioning" yaml:"provisioning"`
 	Grpc             Grpc             `json:"grpc" yaml:"grpc"`
-	LeasePolicy      LeasePolicy      `json:"leasePolicy,omitempty" yaml:"leasePolicy,omitempty"`
-	HiddenLabels     HiddenLabels     `json:"hiddenLabels,omitempty" yaml:"hiddenLabels,omitempty"`
-	DeprecatedLabels DeprecatedLabels `json:"deprecatedLabels,omitempty" yaml:"deprecatedLabels,omitempty"`
+	LeasePolicy      LeasePolicy      `json:"leasePolicy" yaml:"leasePolicy,omitempty"`
+	HiddenLabels     HiddenLabels     `json:"hiddenLabels" yaml:"hiddenLabels,omitempty"`
+	DeprecatedLabels DeprecatedLabels `json:"deprecatedLabels" yaml:"deprecatedLabels,omitempty"`
 	Telemetry        *Telemetry       `json:"telemetry,omitempty" yaml:"telemetry,omitempty"`
 }
 
@@ -49,12 +49,12 @@ type Telemetry struct {
 	Certificate string `json:"certificate,omitempty" yaml:"certificate,omitempty"`
 
 	// Logging configures the log ingestion path to the telemetry service.
-	Logging TelemetryLogging `json:"logging,omitempty" yaml:"logging,omitempty"`
+	Logging TelemetryLogging `json:"logging" yaml:"logging,omitempty"`
 }
 
 // TelemetryLogging configures the log push path to the telemetry service.
 type TelemetryLogging struct {
-	Filter TelemetryLoggingFilter `json:"filter,omitempty" yaml:"filter,omitempty"`
+	Filter TelemetryLoggingFilter `json:"filter" yaml:"filter,omitempty"`
 }
 
 // TelemetryLoggingFilter controls which log entries are forwarded to the telemetry service.
@@ -100,7 +100,7 @@ type DeprecatedLabels struct {
 // Supports multiple authentication methods: internal tokens, Kubernetes tokens, and JWT.
 type Authentication struct {
 	Internal Internal                            `json:"internal" yaml:"internal"`
-	K8s      K8s                                 `json:"k8s,omitempty" yaml:"k8s,omitempty"`
+	K8s      K8s                                 `json:"k8s" yaml:"k8s,omitempty"`
 	JWT      []apiserverv1beta1.JWTAuthenticator `json:"jwt" yaml:"jwt"`
 }
 

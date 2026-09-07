@@ -8,7 +8,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -58,7 +57,7 @@ func (b *BasicAuthorizer) Authorize(
 						Name:      attributes.GetName(),
 					},
 					Spec: jumpstarterdevv1alpha1.ClientSpec{
-						Username: ptr.To(attributes.GetUser().GetName()),
+						Username: new(attributes.GetUser().GetName()),
 					},
 				}
 				if err := b.client.Create(ctx, &c); err != nil {

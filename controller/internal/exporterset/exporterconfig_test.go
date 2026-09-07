@@ -25,7 +25,7 @@ import (
 )
 
 func TestBuildExportMap(t *testing.T) {
-	config := map[string]interface{}{
+	config := map[string]any{
 		"arch": "x86_64",
 		"smp":  2,
 	}
@@ -61,7 +61,7 @@ func TestBuildExportMap(t *testing.T) {
 	if qemu.Type != "jumpstarter_driver_qemu.driver.Qemu" {
 		t.Errorf("qemu type = %q", qemu.Type)
 	}
-	configMap, ok := qemu.Config.(map[string]interface{})
+	configMap, ok := qemu.Config.(map[string]any)
 	if !ok {
 		t.Fatal("qemu config is not a map")
 	}

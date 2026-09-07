@@ -447,7 +447,7 @@ var _ = Describe("ValidateLeaseTags", func() {
 
 	It("should reject more than 10 tags", func() {
 		tags := make(map[string]string)
-		for i := 0; i < 11; i++ {
+		for i := range 11 {
 			tags[fmt.Sprintf("key%d", i)] = "value"
 		}
 		err := ValidateLeaseTags(tags, 10)
@@ -522,7 +522,7 @@ var _ = Describe("ValidateLeaseTags", func() {
 
 	It("should accept exactly 10 tags", func() {
 		tags := make(map[string]string)
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			tags[fmt.Sprintf("key%d", i)] = "value"
 		}
 		Expect(ValidateLeaseTags(tags, 10)).To(Succeed())

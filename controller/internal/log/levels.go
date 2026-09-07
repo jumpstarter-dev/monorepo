@@ -48,31 +48,31 @@ func WithLevel(logger logr.Logger, level int) logr.Logger {
 }
 
 // Error logs an error message (always shown)
-func Error(logger logr.Logger, err error, msg string, keysAndValues ...interface{}) {
+func Error(logger logr.Logger, err error, msg string, keysAndValues ...any) {
 	logger.Error(err, msg, keysAndValues...)
 }
 
 // Warning logs a warning message
-func Warning(logger logr.Logger, msg string, keysAndValues ...interface{}) {
+func Warning(logger logr.Logger, msg string, keysAndValues ...any) {
 	logger.V(LevelWarning).Info(msg, keysAndValues...)
 }
 
 // Info logs an info message
-func Info(logger logr.Logger, msg string, keysAndValues ...interface{}) {
+func Info(logger logr.Logger, msg string, keysAndValues ...any) {
 	logger.V(LevelInfo).Info(msg, keysAndValues...)
 }
 
 // Debug logs a debug message
-func Debug(logger logr.Logger, msg string, keysAndValues ...interface{}) {
+func Debug(logger logr.Logger, msg string, keysAndValues ...any) {
 	logger.V(LevelDebug).Info(msg, keysAndValues...)
 }
 
 // Trace logs a trace message
-func Trace(logger logr.Logger, msg string, keysAndValues ...interface{}) {
+func Trace(logger logr.Logger, msg string, keysAndValues ...any) {
 	logger.V(LevelTrace).Info(msg, keysAndValues...)
 }
 
 // Verbose logs a very verbose trace message
-func Verbose(logger logr.Logger, msg string, keysAndValues ...interface{}) {
+func Verbose(logger logr.Logger, msg string, keysAndValues ...any) {
 	logger.V(LevelVerbose).Info(msg, keysAndValues...)
 }

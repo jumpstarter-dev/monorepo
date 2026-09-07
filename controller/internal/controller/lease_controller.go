@@ -83,7 +83,7 @@ func (r *LeaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		)
 	}
 
-	leaseLogValues := []interface{}{"lease_id", lease.Name, "client", lease.Spec.ClientRef.Name}
+	leaseLogValues := []any{"lease_id", lease.Name, "client", lease.Spec.ClientRef.Name}
 	if lease.Spec.ExporterRef != nil {
 		leaseLogValues = append(leaseLogValues, "exporter", lease.Spec.ExporterRef.Name)
 	}

@@ -272,7 +272,7 @@ func (r *ExporterReconciler) reconcileStatusConditionsOnline(
 	}, nil
 }
 
-func (r *ExporterReconciler) emitEventf(exporter *jumpstarterdevv1alpha1.Exporter, eventType, reason, msgFmt string, args ...interface{}) {
+func (r *ExporterReconciler) emitEventf(exporter *jumpstarterdevv1alpha1.Exporter, eventType, reason, msgFmt string, args ...any) {
 	if r.Recorder == nil {
 		return
 	}

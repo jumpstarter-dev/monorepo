@@ -162,7 +162,7 @@ func (p *Provisioner) RenderPod(
 	ctx context.Context,
 	exporterSet *virtualtargetv1alpha1.ExporterSet,
 	vtc *virtualtargetv1alpha1.VirtualTargetClass,
-	mergedParameters map[string]interface{},
+	mergedParameters map[string]any,
 	images *virtualtargetv1alpha1.ImageOverrides,
 	exporter *jumpstarterdevv1alpha1.Exporter,
 ) (*corev1.Pod, error) {
@@ -241,7 +241,7 @@ func (p *Provisioner) RenderPod(
 					Env:             runtimeEnv,
 					SecurityContext: &corev1.SecurityContext{
 						RunAsUser:    &runAsRoot,
-						RunAsNonRoot: boolPtr(false),
+						RunAsNonRoot: new(false),
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
@@ -322,7 +322,7 @@ func (p *Provisioner) RenderPod(
 // - Auto-injects tcp wrapper driver entry
 func (p *Provisioner) EnrichExporterExport(
 	drivers []virtualtargetv1alpha1.DriverConfig,
-	mergedParameters map[string]interface{},
+	mergedParameters map[string]any,
 ) ([]virtualtargetv1alpha1.DriverConfig, error) {
 	result := make([]virtualtargetv1alpha1.DriverConfig, 0, len(drivers)+1)
 	hasTCP := false
@@ -347,7 +347,7 @@ func (p *Provisioner) EnrichExporterExport(
 		result = append(result, virtualtargetv1alpha1.DriverConfig{
 			Name: "tcp",
 			Type: tcpDriverType,
-			Config: mustJSON(map[string]interface{}{
+			Config: mustJSON(map[string]any{
 				"host": "127.0.0.1",
 				"port": 2222,
 			}),
@@ -358,8 +358,8 @@ func (p *Provisioner) EnrichExporterExport(
 }
 
 // enrichQemuDriver applies QEMU-specific defaults to a driver config entry.
-func enrichQemuDriver(d virtualtargetv1alpha1.DriverConfig, params map[string]interface{}) (virtualtargetv1alpha1.DriverConfig, error) {
-	config := make(map[string]interface{})
+func enrichQemuDriver(d virtualtargetv1alpha1.DriverConfig, params map[string]any) (virtualtargetv1alpha1.DriverConfig, error) {
+	config := make(map[string]any)
 	if d.Config != nil && d.Config.Raw != nil {
 		if err := json.Unmarshal(d.Config.Raw, &config); err != nil {
 			return d, fmt.Errorf("unmarshal QEMU driver config: %w", err)
@@ -382,12 +382,12 @@ func enrichQemuDriver(d virtualtargetv1alpha1.DriverConfig, params map[string]in
 	}
 
 	// Inject hostfwd.ssh if not already present.
-	hostfwd, _ := config["hostfwd"].(map[string]interface{})
+	hostfwd, _ := config["hostfwd"].(map[string]any)
 	if hostfwd == nil {
-		hostfwd = make(map[string]interface{})
+		hostfwd = make(map[string]any)
 	}
 	if _, hasSSH := hostfwd["ssh"]; !hasSSH {
-		hostfwd["ssh"] = map[string]interface{}{
+		hostfwd["ssh"] = map[string]any{
 			"hostaddr":  "127.0.0.1",
 			"hostport":  2222,
 			"guestport": 22,
@@ -418,15 +418,15 @@ func defaultPartitionsForArch(arch string) map[string]string {
 
 // setDefault sets config[key] from params[paramPath] if not already set.
 // paramPath supports one level of nesting with dot notation.
-func setDefault(config map[string]interface{}, key string, params map[string]interface{}, paramPath string) {
+func setDefault(config map[string]any, key string, params map[string]any, paramPath string) {
 	if _, exists := config[key]; exists {
 		return
 	}
 
 	parts := splitDot(paramPath)
-	var val interface{} = params
+	var val any = params
 	for _, p := range parts {
-		m, ok := val.(map[string]interface{})
+		m, ok := val.(map[string]any)
 		if !ok {
 			return
 		}
@@ -445,7 +445,7 @@ func setDefault(config map[string]interface{}, key string, params map[string]int
 
 // normalizeQemuSize converts Kubernetes binary quantity strings (e.g. "10Gi")
 // to the form expected by the QEMU driver / qemu-img (e.g. "10G").
-func normalizeQemuSize(v interface{}) interface{} {
+func normalizeQemuSize(v any) any {
 	s, ok := v.(string)
 	if !ok || len(s) < 2 {
 		return v
@@ -474,13 +474,9 @@ func splitDot(s string) []string {
 	return result
 }
 
-func mustJSON(v interface{}) *apiextensionsv1.JSON {
+func mustJSON(v any) *apiextensionsv1.JSON {
 	raw, _ := json.Marshal(v)
 	return &apiextensionsv1.JSON{Raw: raw}
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }
 
 // Cleanup handles teardown of QEMU-based exporter instances.
