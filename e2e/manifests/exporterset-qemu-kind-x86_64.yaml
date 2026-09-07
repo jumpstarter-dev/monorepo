@@ -31,7 +31,9 @@ spec:
     resources:
       cpu: 1
       memory: 1Gi
-      storage: 10Gi
+    storage:
+      size: 10Gi
+      fsOverhead: "10%"
 ---
 apiVersion: virtualtarget.jumpstarter.dev/v1alpha1
 kind: ExporterSet

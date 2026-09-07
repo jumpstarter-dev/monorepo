@@ -17,14 +17,13 @@ limitations under the License.
 // Package disk provides shared helpers for guest-disk volume provisioning
 // used by ExporterSet provisioners.
 //
-// Size comes from parameters.resources.storage (JEP-0014). Kubernetes
-// backend config comes from parameters.storage:
+// Guest disk config lives under parameters.storage (JEP-0014):
 //
 //	parameters:
-//	  resources:
-//	    storage: 20Gi
 //	  storage:
-//	    storageClassName: gp3   # omit or "" → sized emptyDir
+//	    size: 20Gi
+//	    fsOverhead: "10%"           # default; "0%" disables inflation
+//	    storageClassName: gp3       # omit or "" → sized emptyDir
 //	    accessModes: ["ReadWriteOnce"]
 //
 // When storageClassName is set, the volume is a generic ephemeral PVC
@@ -33,6 +32,8 @@ package disk
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -45,13 +46,19 @@ const (
 	// MountPath is where guest disk storage is mounted in exporter and runtime.
 	MountPath = "/disk"
 
-	// DefaultSize is used when parameters.resources.storage is unset.
+	// DefaultSize is used when parameters.storage.size is unset.
 	DefaultSize = "10Gi"
+
+	// DefaultFSOverhead is applied to volume requests when fsOverhead is omitted.
+	DefaultFSOverhead = "10%"
 )
 
 // Spec is the resolved guest-disk volume configuration.
 type Spec struct {
-	Size             resource.Quantity
+	// Size is the logical guest disk size (parameters.storage.size).
+	Size resource.Quantity
+	// VolumeSize is the physical allocation (Size plus fsOverhead).
+	VolumeSize       resource.Quantity
 	StorageClassName string
 	AccessModes      []corev1.PersistentVolumeAccessMode
 }
@@ -72,15 +79,16 @@ func Mount() corev1.VolumeMount {
 // FromParameters reads disk size and optional storage backend from merged
 // ExporterSet/VirtualTargetClass parameters.
 func FromParameters(params map[string]interface{}) (Spec, error) {
-	size, err := SizeFromParameters(params)
-	if err != nil {
-		return Spec{}, err
-	}
 	spec := Spec{
-		Size:        size,
 		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 	}
 	if params == nil {
+		size, err := parseSize("")
+		if err != nil {
+			return Spec{}, err
+		}
+		spec.Size = size
+		spec.VolumeSize = applyOverhead(size, defaultOverheadPercent())
 		return spec, nil
 	}
 	storage, ok := params["storage"].(map[string]interface{})
@@ -88,8 +96,37 @@ func FromParameters(params map[string]interface{}) (Spec, error) {
 		if params["storage"] != nil {
 			return Spec{}, fmt.Errorf("parameters.storage must be an object, got %T", params["storage"])
 		}
+		size, err := parseSize("")
+		if err != nil {
+			return Spec{}, err
+		}
+		spec.Size = size
+		spec.VolumeSize = applyOverhead(size, defaultOverheadPercent())
 		return spec, nil
 	}
+
+	sizeRaw := ""
+	if raw, exists := storage["size"]; exists && raw != nil {
+		switch v := raw.(type) {
+		case string:
+			sizeRaw = v
+		case float64:
+			return Spec{}, fmt.Errorf("parameters.storage.size must be a string quantity (e.g. \"10Gi\"), got number %v", v)
+		default:
+			return Spec{}, fmt.Errorf("parameters.storage.size must be a string quantity (e.g. \"10Gi\"), got %T", v)
+		}
+	}
+	size, err := parseSize(sizeRaw)
+	if err != nil {
+		return Spec{}, err
+	}
+	spec.Size = size
+
+	overheadPercent, err := parseFSOverhead(storage["fsOverhead"])
+	if err != nil {
+		return Spec{}, err
+	}
+	spec.VolumeSize = applyOverhead(size, overheadPercent)
 
 	switch v := storage["storageClassName"].(type) {
 	case string:
@@ -110,31 +147,13 @@ func FromParameters(params map[string]interface{}) (Spec, error) {
 	return spec, nil
 }
 
-// SizeFromParameters reads parameters.resources.storage, defaulting to DefaultSize.
+// SizeFromParameters reads parameters.storage.size, defaulting to DefaultSize.
 func SizeFromParameters(params map[string]interface{}) (resource.Quantity, error) {
-	raw := DefaultSize
-	if params != nil {
-		if resources, ok := params["resources"].(map[string]interface{}); ok {
-			switch v := resources["storage"].(type) {
-			case string:
-				if v != "" {
-					raw = v
-				}
-			case float64:
-				return resource.Quantity{}, fmt.Errorf("parameters.resources.storage must be a string quantity (e.g. \"10Gi\"), got number %v", v)
-			case nil:
-				// use default
-			default:
-				return resource.Quantity{}, fmt.Errorf("parameters.resources.storage must be a string quantity (e.g. \"10Gi\"), got %T", v)
-			}
-		}
-	}
-
-	qty, err := resource.ParseQuantity(raw)
+	spec, err := FromParameters(params)
 	if err != nil {
-		return resource.Quantity{}, fmt.Errorf("parse parameters.resources.storage %q: %w", raw, err)
+		return resource.Quantity{}, err
 	}
-	return qty, nil
+	return spec.Size, nil
 }
 
 // Volume builds the guest-disk Pod volume from spec.
@@ -150,7 +169,7 @@ func Volume(spec Spec) corev1.Volume {
 						StorageClassName: &sc,
 						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
-								corev1.ResourceStorage: spec.Size,
+								corev1.ResourceStorage: spec.VolumeSize,
 							},
 						},
 					},
@@ -159,7 +178,7 @@ func Volume(spec Spec) corev1.Volume {
 		}
 		return vol
 	}
-	size := spec.Size.DeepCopy()
+	size := spec.VolumeSize.DeepCopy()
 	vol.VolumeSource = corev1.VolumeSource{
 		EmptyDir: &corev1.EmptyDirVolumeSource{
 			SizeLimit: &size,
@@ -186,6 +205,63 @@ func SetEphemeralStorage(resources *corev1.ResourceRequirements, size resource.Q
 	}
 }
 
+func parseSize(raw string) (resource.Quantity, error) {
+	if raw == "" {
+		raw = DefaultSize
+	}
+	qty, err := resource.ParseQuantity(raw)
+	if err != nil {
+		return resource.Quantity{}, fmt.Errorf("parse parameters.storage.size %q: %w", raw, err)
+	}
+	return qty, nil
+}
+
+func defaultOverheadPercent() int {
+	percent, err := parseFSOverhead(nil)
+	if err != nil {
+		return 10
+	}
+	return percent
+}
+
+func parseFSOverhead(v interface{}) (int, error) {
+	raw := DefaultFSOverhead
+	if v != nil {
+		s, ok := v.(string)
+		if !ok {
+			return 0, fmt.Errorf("parameters.storage.fsOverhead must be a percentage string (e.g. \"10%%\"), got %T", v)
+		}
+		raw = s
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = DefaultFSOverhead
+	}
+	if !strings.HasSuffix(raw, "%") {
+		return 0, fmt.Errorf("parameters.storage.fsOverhead must be a percentage string (e.g. \"10%%\"), got %q", raw)
+	}
+	percentStr := strings.TrimSpace(strings.TrimSuffix(raw, "%"))
+	if percentStr == "" {
+		return 0, fmt.Errorf("parameters.storage.fsOverhead must be a percentage string (e.g. \"10%%\"), got %q", raw)
+	}
+	percent, err := strconv.Atoi(percentStr)
+	if err != nil {
+		return 0, fmt.Errorf("parse parameters.storage.fsOverhead %q: %w", raw, err)
+	}
+	if percent < 0 {
+		return 0, fmt.Errorf("parameters.storage.fsOverhead must be non-negative, got %q", raw)
+	}
+	return percent, nil
+}
+
+func applyOverhead(size resource.Quantity, overheadPercent int) resource.Quantity {
+	if overheadPercent == 0 {
+		return size.DeepCopy()
+	}
+	inflated := size.Value() * int64(100+overheadPercent) / 100
+	return *resource.NewQuantity(inflated, size.Format)
+}
+
 func parseAccessModes(v interface{}) ([]corev1.PersistentVolumeAccessMode, error) {
 	items, ok := v.([]interface{})
 	if !ok {
@@ -200,6 +276,7 @@ func parseAccessModes(v interface{}) ([]corev1.PersistentVolumeAccessMode, error
 		if !ok || s == "" {
 			return nil, fmt.Errorf("parameters.storage.accessModes must be a list of strings, got %T", item)
 		}
+		// Kubernetes validates access modes at PVC creation time.
 		out = append(out, corev1.PersistentVolumeAccessMode(s))
 	}
 	return out, nil

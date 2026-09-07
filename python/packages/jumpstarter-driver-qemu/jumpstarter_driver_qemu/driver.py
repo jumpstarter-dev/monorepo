@@ -498,7 +498,9 @@ class Qemu(Driver):
         if self.launcher_socket:
             work = Path(self._work_dir)
             # Production sidecar: sockets on /shared, guest disk on /disk.
-            # Tests use a tmp shared dir — keep disks next to sockets.
+            # Must match controller/internal/exporterset/provisioners/qemu/qemu.go
+            # sharedMountPath ("/shared") and controller/internal/exporterset/disk/disk.go
+            # MountPath ("/disk"). Tests use a tmp shared dir — keep disks next to sockets.
             if work == Path("/shared"):
                 return "/disk"
             return str(work)

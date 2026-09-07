@@ -333,12 +333,13 @@ func (p *Provisioner) RenderPod(
 		}
 		pod.Spec.SecurityContext.FSGroup = &runAsExporter
 	} else {
-		// emptyDir guest disks consume node ephemeral storage — ensure the
-		// scheduler and kubelet account for it on containers that mount /disk.
-		disk.SetEphemeralStorage(&pod.Spec.Containers[0].Resources, diskSpec.Size)
+		// emptyDir guest disks consume node ephemeral storage. Reserve capacity
+		// on one container only — the scheduler sums requests from all containers
+		// (including restartable init containers / native sidecars).
 		for i := range pod.Spec.InitContainers {
 			if pod.Spec.InitContainers[i].Name == runtimeContainerName {
-				disk.SetEphemeralStorage(&pod.Spec.InitContainers[i].Resources, diskSpec.Size)
+				disk.SetEphemeralStorage(&pod.Spec.InitContainers[i].Resources, diskSpec.VolumeSize)
+				break
 			}
 		}
 	}
@@ -405,7 +406,7 @@ func enrichQemuDriver(d virtualtargetv1alpha1.DriverConfig, params map[string]in
 	setDefault(config, "arch", params, "arch")
 	setDefault(config, "smp", params, "resources.cpu")
 	setDefault(config, "mem", params, "resources.memory")
-	setDefault(config, "disk_size", params, "resources.storage")
+	setDefault(config, "disk_size", params, "storage.size")
 
 	// Inject default_partitions based on arch unless user explicitly set them.
 	if _, hasPartitions := config["default_partitions"]; !hasPartitions {

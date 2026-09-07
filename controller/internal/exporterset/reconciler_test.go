@@ -998,9 +998,11 @@ func TestComputePoolState(t *testing.T) {
 func TestDeepMerge_mapsRecursive(t *testing.T) {
 	base := map[string]interface{}{
 		"resources": map[string]interface{}{
-			"cpu":     "4",
-			"memory":  "4Gi",
-			"storage": "16Gi",
+			"cpu":    "4",
+			"memory": "4Gi",
+		},
+		"storage": map[string]interface{}{
+			"size": "16Gi",
 		},
 		"firmware": map[string]interface{}{
 			"url": "registry.example.com/fw:v1",
@@ -1021,8 +1023,10 @@ func TestDeepMerge_mapsRecursive(t *testing.T) {
 	if resources["memory"] != "8Gi" {
 		t.Errorf("memory = %v, want 8Gi", resources["memory"])
 	}
-	if resources["storage"] != "16Gi" {
-		t.Errorf("storage = %v, want 16Gi", resources["storage"])
+
+	storage := result["storage"].(map[string]interface{})
+	if storage["size"] != "16Gi" {
+		t.Errorf("storage.size = %v, want 16Gi", storage["size"])
 	}
 
 	firmware := result["firmware"].(map[string]interface{})

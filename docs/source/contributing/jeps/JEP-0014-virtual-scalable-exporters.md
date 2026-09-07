@@ -163,7 +163,9 @@ spec:
     resources:
       cpu: 4
       memory: 4Gi
-      storage: 16Gi
+    storage:
+      size: 16Gi
+      fsOverhead: "10%"
     # storage:
     #   storageClassName: gp3        # omit → sized emptyDir at /disk
 ```
@@ -183,7 +185,7 @@ spec:
   virtualTargetClassName: qemu-rpi4  # same-namespace VirtualTargetClass name
   parameters:                        # optional; deep-merged over class parameters
     resources:
-      memory: 8Gi                    # override only memory; cpu/storage inherited
+      memory: 8Gi                    # override only memory; cpu inherited
   selector:
     matchLabels:
       board: rpi4
@@ -456,7 +458,9 @@ spec:
     resources:
       cpu: 4
       memory: 4Gi
-      storage: 16Gi
+    storage:
+      size: 16Gi
+      fsOverhead: "10%"
 ```
 
 2. Create an `ExporterSet` in the **same namespace** that references the class
@@ -946,7 +950,9 @@ mergedParameters = deepMerge(VirtualTargetClass.spec.parameters,
 resources:
   cpu: 4
   memory: 4Gi
-  storage: 16Gi
+storage:
+  size: 16Gi
+  fsOverhead: "10%"
 firmware:
   url: registry.example.com/firmware/rpi4:v1
   digest: sha256:abc...
@@ -959,21 +965,25 @@ resources:
 resources:
   cpu: 4              # inherited from class
   memory: 8Gi         # overridden by set
-  storage: 16Gi       # inherited from class
+storage:              # unchanged — set did not specify storage
+  size: 16Gi
+  fsOverhead: "10%"
 firmware:             # unchanged — set did not specify firmware
   url: registry.example.com/firmware/rpi4:v1
   digest: sha256:abc...
 ```
 
-**Guest disk (`qemu.jumpstarter.dev`):** `parameters.resources.storage` is the
+**Guest disk (`qemu.jumpstarter.dev`):** `parameters.storage.size` is the
 guest disk size (also mapped to the QEMU driver's `disk_size`). Optional
-`parameters.storage` selects the Kubernetes volume backend:
+`parameters.storage.fsOverhead` (default `"10%"`, use `"0%"` to disable) inflates
+the Kubernetes volume request to leave filesystem headroom for flashing.
+`parameters.storage` also selects the Kubernetes volume backend:
 
 ```yaml
 parameters:
-  resources:
-    storage: 16Gi
   storage:
+    size: 16Gi
+    fsOverhead: "10%"
     storageClassName: gp3          # omit or "" → sized emptyDir
     accessModes: ["ReadWriteOnce"] # default ReadWriteOnce
 ```
@@ -982,8 +992,8 @@ When `storageClassName` is set, the provisioner attaches a [generic ephemeral
 volume](https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/#generic-ephemeral-volumes)
 (`volumeClaimTemplate`) at `/disk` so the claim is created and deleted with the
 Pod (ExitAndReplace). When it is omitted, `/disk` is a sized `emptyDir` and
-the provisioner sets `ephemeral-storage` requests/limits for scheduler
-accounting. Unix sockets stay on the separate 100Mi `/shared` volume.
+the provisioner sets `ephemeral-storage` requests/limits on the runtime sidecar
+for scheduler accounting. Unix sockets stay on the separate 100Mi `/shared` volume.
 ExporterSet `parameters.storage` deep-merges over the class; an empty
 `storageClassName` on the set forces emptyDir.
 
@@ -1754,9 +1764,10 @@ claim CRDs.
 - 2026-07-28: Made `DriverConfig.name` mandatory (no longer derived from type);
   removed `wait-for-binary.sh` script in favor of direct `jumpstarter-exec`
   entrypoint in `qemu-runtime` container; updated all examples
-- 2026-09-01: Guest disk at `/disk` via `parameters.resources.storage` (size)
-  and optional `parameters.storage.storageClassName` (generic ephemeral PVC or
-  sized emptyDir); sockets remain on `/shared`
+- 2026-09-01: Guest disk at `/disk` via `parameters.storage.size` (logical size),
+  optional `parameters.storage.fsOverhead` (default `"10%"`), and optional
+  `parameters.storage.storageClassName` (generic ephemeral PVC or sized emptyDir);
+  sockets remain on `/shared`
 
 ## References
 
