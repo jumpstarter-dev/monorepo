@@ -11,6 +11,24 @@ class JumpstarterKubernetesError(Exception):
     pass
 
 
+class CredentialNotReadyError(JumpstarterKubernetesError):
+    """Raised when a client or exporter exists but has no credentials yet.
+
+    The controller issues credentials asynchronously, so a resource created a
+    moment ago - or one in a namespace the controller does not watch - has a
+    name but nothing to authenticate with.
+    """
+
+    def __init__(self, kind: str, name: str):
+        self.kind = kind
+        self.name = name
+        super().__init__(
+            f"The {kind} '{name}' has no credentials yet. "
+            "The Jumpstarter controller issues them shortly after the resource is created; "
+            "check that it is running and watching this namespace, then try again."
+        )
+
+
 class ToolNotInstalledError(JumpstarterKubernetesError):
     """Raised when a required tool (kind, minikube, kubectl) is not installed."""
 

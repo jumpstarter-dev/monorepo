@@ -1,11 +1,12 @@
 import asyncio
 import base64
-from typing import Literal
+from typing import Literal, Optional
 
 from kubernetes_asyncio.client.models import V1ObjectMeta, V1ObjectReference
 from pydantic import Field
 
 from .datetime import time_since
+from .exceptions import CredentialNotReadyError
 from .json import JsonBaseModel
 from .list import V1Alpha1List
 from .serialize import SerializeV1ObjectMeta, SerializeV1ObjectReference
@@ -24,9 +25,11 @@ class V1Alpha1ExporterDevice(JsonBaseModel):
 
 
 class V1Alpha1ExporterStatus(JsonBaseModel):
-    credential: SerializeV1ObjectReference
-    devices: list[V1Alpha1ExporterDevice]
-    endpoint: str
+    # The controller fills these in after it reconciles the exporter, so a
+    # freshly created one has a status with nothing in it yet.
+    credential: Optional[SerializeV1ObjectReference] = None
+    devices: list[V1Alpha1ExporterDevice] = []
+    endpoint: str = ""
     exporter_status: str | None = Field(alias="exporterStatus", default=None)
     status_message: str | None = Field(alias="statusMessage", default=None)
 
@@ -35,7 +38,7 @@ class V1Alpha1Exporter(JsonBaseModel):
     api_version: Literal["jumpstarter.dev/v1alpha1"] = Field(alias="apiVersion", default="jumpstarter.dev/v1alpha1")
     kind: Literal["Exporter"] = Field(default="Exporter")
     metadata: SerializeV1ObjectMeta
-    status: V1Alpha1ExporterStatus
+    status: Optional[V1Alpha1ExporterStatus] = None
 
     @staticmethod
     def from_dict(dict: dict):
@@ -57,13 +60,16 @@ class V1Alpha1Exporter(JsonBaseModel):
                 credential=V1ObjectReference(name=dict["status"]["credential"]["name"])
                 if "credential" in dict["status"]
                 else None,
-                endpoint=dict["status"]["endpoint"],
+                endpoint=dict["status"].get("endpoint", ""),
                 devices=[V1Alpha1ExporterDevice(labels=d["labels"], uuid=d["uuid"]) for d in dict["status"]["devices"]]
                 if "devices" in dict["status"]
                 else [],
                 exporter_status=dict["status"].get("exporterStatus"),
                 status_message=dict["status"].get("statusMessage"),
-            ),
+            )
+            # An exporter the controller has not reconciled yet has no status.
+            if "status" in dict
+            else None,
         )
 
     @classmethod
@@ -85,26 +91,38 @@ class V1Alpha1Exporter(JsonBaseModel):
     def rich_add_rows(self, table, devices: bool = False):
         status = self.status.exporter_status if self.status else "Unknown"
         if devices:
-            if self.status is not None:
-                for d in self.status.devices:
-                    labels = []
-                    if d.labels is not None:
-                        for label in d.labels:
-                            labels.append(f"{label}:{str(d.labels[label])}")
-                    table.add_row(
-                        self.metadata.name,
-                        status or "Unknown",
-                        self.status.endpoint,
-                        time_since(self.metadata.creation_timestamp),
-                        ",".join(labels),
-                        d.uuid,
-                    )
+            if not (self.status and self.status.devices):
+                # An exporter with no devices to enumerate — never run, or not
+                # reconciled yet — still exists, so it still gets a row. Without
+                # this it disappears from the listing entirely.
+                table.add_row(
+                    self.metadata.name,
+                    status or "Unknown",
+                    self.status.endpoint if self.status else "",
+                    time_since(self.metadata.creation_timestamp),
+                    "",
+                    "",
+                )
+                return
+            for d in self.status.devices:
+                labels = []
+                if d.labels is not None:
+                    for label in d.labels:
+                        labels.append(f"{label}:{str(d.labels[label])}")
+                table.add_row(
+                    self.metadata.name,
+                    status or "Unknown",
+                    self.status.endpoint,
+                    time_since(self.metadata.creation_timestamp),
+                    ",".join(labels),
+                    d.uuid,
+                )
 
         else:
             table.add_row(
                 self.metadata.name,
                 status or "Unknown",
-                self.status.endpoint,
+                self.status.endpoint if self.status else "",
                 str(len(self.status.devices) if self.status and self.status.devices else 0),
                 time_since(self.metadata.creation_timestamp),
             )
@@ -188,6 +206,8 @@ class ExportersV1Alpha1Api(AbstractAsyncCustomObjectApi):
     async def get_exporter_config(self, name: str) -> ExporterConfigV1Alpha1:
         """Get an exporter config for a specified exporter name"""
         exporter = await self.get_exporter(name)
+        if exporter.status is None or exporter.status.credential is None:
+            raise CredentialNotReadyError("exporter", name)
         secret = await self.core_api.read_namespaced_secret(exporter.status.credential.name, self.namespace)
         endpoint = exporter.status.endpoint
         token = base64.b64decode(secret.data["token"]).decode("utf8")

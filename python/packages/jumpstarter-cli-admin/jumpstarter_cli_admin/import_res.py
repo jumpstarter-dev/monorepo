@@ -13,6 +13,7 @@ from jumpstarter_cli_common.opt import (
     opt_output_path_only,
 )
 from jumpstarter_kubernetes import ClientsV1Alpha1Api, ExportersV1Alpha1Api
+from jumpstarter_kubernetes.exceptions import JumpstarterKubernetesError
 from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.config.config_exception import ConfigException
 
@@ -92,6 +93,8 @@ async def import_client(
                 click.echo(f"Client configuration successfully saved to {config_path}")
             else:
                 click.echo(config_path)
+    except JumpstarterKubernetesError as e:
+        raise click.ClickException(str(e)) from e
     except ApiException as e:
         handle_k8s_api_exception(e)
     except ConfigException as e:
@@ -141,6 +144,8 @@ async def import_exporter(
                 click.echo(f"Exporter configuration successfully saved to {config_path}")
             else:
                 click.echo(config_path)
+    except JumpstarterKubernetesError as e:
+        raise click.ClickException(str(e)) from e
     except ApiException as e:
         handle_k8s_api_exception(e)
     except ConfigException as e:

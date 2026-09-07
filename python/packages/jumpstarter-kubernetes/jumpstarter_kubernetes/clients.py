@@ -7,6 +7,7 @@ from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.client.models import V1ObjectMeta, V1ObjectReference
 from pydantic import Field
 
+from .exceptions import CredentialNotReadyError
 from .json import JsonBaseModel
 from .list import V1Alpha1List
 from .serialize import SerializeV1ObjectMeta, SerializeV1ObjectReference
@@ -148,6 +149,8 @@ class ClientsV1Alpha1Api(AbstractAsyncCustomObjectApi):
     async def get_client_config(self, name: str, allow: list[str], unsafe=False) -> ClientConfigV1Alpha1:
         """Get a client config for a specified client name"""
         client = await self.get_client(name)
+        if client.status is None or client.status.credential is None:
+            raise CredentialNotReadyError("client", name)
         secret = await self.core_api.read_namespaced_secret(client.status.credential.name, self.namespace)
         endpoint = client.status.endpoint
         token = base64.b64decode(secret.data["token"]).decode("utf8")

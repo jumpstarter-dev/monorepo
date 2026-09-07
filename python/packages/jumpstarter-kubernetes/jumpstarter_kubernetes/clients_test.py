@@ -7,6 +7,7 @@ from kubernetes_asyncio.client.models import V1ConfigMap, V1ObjectMeta, V1Secret
 
 from jumpstarter_kubernetes import V1Alpha1Client, V1Alpha1ClientStatus
 from jumpstarter_kubernetes.clients import ClientsV1Alpha1Api
+from jumpstarter_kubernetes.exceptions import CredentialNotReadyError
 
 TEST_CLIENT = V1Alpha1Client(
     api_version="jumpstarter.dev/v1alpha1",
@@ -424,3 +425,30 @@ def test_client_from_dict_keeps_labels():
     )
     assert client.metadata.labels == {"team": "platform"}
     assert '"team": "platform"' in client.dump_json()
+
+
+@pytest.mark.asyncio
+async def test_get_client_config_without_credentials():
+    """A client whose credentials the controller has not issued yet is reported, not crashed on"""
+    api = ClientsV1Alpha1Api(namespace="test-namespace")
+    api.api = AsyncMock()
+    api.core_api = AsyncMock()
+    api.api.get_namespaced_custom_object = AsyncMock(
+        return_value={
+            "apiVersion": "jumpstarter.dev/v1alpha1",
+            "kind": "Client",
+            "metadata": {
+                "creationTimestamp": "2021-10-01T00:00:00Z",
+                "generation": 1,
+                "name": "fresh-client",
+                "namespace": "test-namespace",
+                "resourceVersion": "1",
+                "uid": "test-uid",
+            },
+        }
+    )
+
+    with pytest.raises(CredentialNotReadyError, match="fresh-client"):
+        await api.get_client_config("fresh-client", allow=[], unsafe=False)
+
+    api.core_api.read_namespaced_secret.assert_not_awaited()

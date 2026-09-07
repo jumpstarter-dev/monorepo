@@ -5,6 +5,7 @@ import pytest
 from kubernetes_asyncio.client.exceptions import ApiException
 from kubernetes_asyncio.client.models import V1ConfigMap, V1ObjectMeta, V1ObjectReference, V1Secret
 
+from jumpstarter_kubernetes.exceptions import CredentialNotReadyError
 from jumpstarter_kubernetes.exporters import (
     ExportersV1Alpha1Api,
     V1Alpha1Exporter,
@@ -384,3 +385,93 @@ def test_exporter_from_dict_keeps_labels():
     )
     assert exporter.metadata.labels == {"board": "rpi4"}
     assert '"board": "rpi4"' in exporter.dump_json()
+
+
+@pytest.mark.asyncio
+async def test_get_exporter_config_without_credentials():
+    """An exporter whose credentials the controller has not issued yet is reported, not crashed on"""
+    api = ExportersV1Alpha1Api(namespace="test-namespace")
+    api.api = AsyncMock()
+    api.core_api = AsyncMock()
+    api.api.get_namespaced_custom_object = AsyncMock(
+        return_value={
+            "apiVersion": "jumpstarter.dev/v1alpha1",
+            "kind": "Exporter",
+            "metadata": {
+                "creationTimestamp": "2021-10-01T00:00:00Z",
+                "generation": 1,
+                "name": "fresh-exporter",
+                "namespace": "test-namespace",
+                "resourceVersion": "1",
+                "uid": "test-uid",
+            },
+        }
+    )
+
+    with pytest.raises(CredentialNotReadyError, match="fresh-exporter"):
+        await api.get_exporter_config("fresh-exporter")
+
+    api.core_api.read_namespaced_secret.assert_not_awaited()
+
+
+def test_exporter_from_dict_without_status():
+    """An exporter the controller has not reconciled yet has no status at all"""
+    exporter = V1Alpha1Exporter.from_dict(
+        {
+            "apiVersion": "jumpstarter.dev/v1alpha1",
+            "kind": "Exporter",
+            "metadata": {
+                "creationTimestamp": "2021-10-01T00:00:00Z",
+                "generation": 1,
+                "name": "fresh-exporter",
+                "namespace": "default",
+                "resourceVersion": "1",
+                "uid": "7a25eb81-6443-47ec-a62f-50165bffede8",
+            },
+        }
+    )
+    assert exporter.metadata.name == "fresh-exporter"
+    assert exporter.status is None
+
+
+def test_exporter_rich_add_rows_without_status():
+    """A status-less exporter still renders as a row"""
+    exporter = V1Alpha1Exporter(
+        api_version="jumpstarter.dev/v1alpha1",
+        kind="Exporter",
+        metadata=V1ObjectMeta(name="fresh-exporter", namespace="default", creation_timestamp="2021-10-01T00:00:00Z"),
+        status=None,
+    )
+    mock_table = MagicMock()
+    exporter.rich_add_rows(mock_table)
+    name, status, endpoint, devices, _age = mock_table.add_row.call_args.args
+    assert (name, status, endpoint, devices) == ("fresh-exporter", "Unknown", "", "0")
+
+
+def test_exporter_rich_add_rows_devices_without_status():
+    """A status-less exporter is still listed when devices are requested"""
+    exporter = V1Alpha1Exporter(
+        api_version="jumpstarter.dev/v1alpha1",
+        kind="Exporter",
+        metadata=V1ObjectMeta(name="fresh-exporter", namespace="default", creation_timestamp="2021-10-01T00:00:00Z"),
+        status=None,
+    )
+    mock_table = MagicMock()
+    exporter.rich_add_rows(mock_table, devices=True)
+    name, status, endpoint, _age, labels, uuid = mock_table.add_row.call_args.args
+    assert (name, status, endpoint, labels, uuid) == ("fresh-exporter", "Unknown", "", "", "")
+
+
+def test_exporter_rich_add_rows_devices_when_it_has_none():
+    """An exporter that has never run has no devices, but has not disappeared"""
+    exporter = V1Alpha1Exporter(
+        api_version="jumpstarter.dev/v1alpha1",
+        kind="Exporter",
+        metadata=V1ObjectMeta(name="never-run", namespace="default", creation_timestamp="2021-10-01T00:00:00Z"),
+        status=V1Alpha1ExporterStatus(endpoint="https://e", devices=[]),
+    )
+    mock_table = MagicMock()
+    exporter.rich_add_rows(mock_table, devices=True)
+    assert mock_table.add_row.call_count == 1
+    name, status, endpoint, _age, labels, uuid = mock_table.add_row.call_args.args
+    assert (name, status, endpoint, labels, uuid) == ("never-run", "Unknown", "https://e", "", "")
